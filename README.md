@@ -1,222 +1,182 @@
-# 📝 Online Examination System
+# Online Examination System
 
-A web-based platform for conducting online examinations, with Admin, Teacher, and Student modules for account and exam management, question handling, and result generation. The application provides separate workspaces for these roles, with exam timing and score calculation handled by the server.
+A Flask examination portal with separate administrator, teacher, and student
+workspaces. It supports account management, scheduled multiple-choice exams,
+timed attempts, autosaved answers, server-side scoring, and result history.
+The existing features and database models are retained.
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Flask](https://img.shields.io/badge/Flask-3.x-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
-[![Database](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-
-## 📚 Table of Contents
-
-- [Project Overview](#-project-overview)
-- [Key Features](#-key-features)
-- [Admin Module](#-admin-module)
-- [Teacher Module](#-teacher-module)
-- [Student Module](#-student-module)
-- [Technologies Used](#-technologies-used)
-- [Project Structure](#-project-structure)
-- [Installation and Setup](#-installation-and-setup)
-- [How to Run the Project](#-how-to-run-the-project)
-- [Tests](#-tests)
-- [Database Import](#-database-import)
-- [Future Enhancements](#-future-enhancements)
-- [Author](#-author)
-- [GitHub Repository](#-github-repository)
-
-## 🔎 Project Overview
-
-The Online Examination System is a Flask application for the day-to-day workflows of a college examination portal. Administrators manage staff accounts, teachers prepare and schedule exams, and students take available exams and review submitted results.
-
-Exams use multiple-choice questions. During an attempt, student answers are saved as they are selected; the server enforces the deadline, validates answers, and calculates the final score. SQLite is used by default, and a utility is included to copy compatible data from the project’s existing MySQL schema into the application database.
-
-## ✨ Key Features
-
-- Separate, role-based dashboards for administrators, teachers, and students.
-- Student registration and account sign-in.
-- Exam creation and editing, with draft, published, and closed states.
-- Exam availability schedules, question marks, and timed attempts.
-- Four-choice multiple-choice questions.
-- Answer autosave, question progress indicators, and automatic submission when time expires.
-- Server-side answer validation and score calculation.
-- One attempt per student for each exam.
-- Session-bound CSRF checks on state-changing requests.
-- SQLite by default, plus a MySQL-to-SQLite data import script.
-
-## 🛡️ Admin Module
-
-- View portal statistics from the administrator dashboard.
-- Create teacher and administrator accounts.
-- Activate or deactivate accounts.
-- Manage examinations and review results.
-- Create the initial administrator through a one-time development setup page or the CLI.
-
-## 🧑‍🏫 Teacher Module
-
-- Create and edit examinations with a title, subject, description, duration, marks, and optional availability dates.
-- Manage exam publication state.
-- Add and remove multiple-choice questions, assign marks, and set the correct answer.
-- Review submitted student results.
-- Manage only the teacher’s own exams; administrators can manage examinations across the portal.
-
-## 🎓 Student Module
-
-- Register with student details and sign in to the portal.
-- Browse available examinations and review instructions before starting.
-- Complete a timed exam with a visible countdown and answer progress.
-- Have selected answers autosaved during an attempt.
-- Submit an attempt, or have it automatically submitted when its deadline expires.
-- Review submitted results.
-
-## 🧰 Technologies Used
-
-| Technology | Use |
-|---|---|
-| Python 3.10+ | Application language |
-| Flask 3.x | Web application and command-line interface |
-| Flask-SQLAlchemy / SQLAlchemy | ORM, models, and database access |
-| SQLite | Default application database |
-| PyMySQL | MySQL connectivity for the import utility |
-| HTML5, CSS3, and vanilla JavaScript | Templates, responsive styling, and browser-side interactions |
-| python-dotenv | Load local environment configuration |
-| Werkzeug and bcrypt | Password hashing and legacy bcrypt password verification |
-| pytest | Application tests |
-| Waitress | Included WSGI server for Windows deployments |
-
-## 🗂️ Project Structure
-
-```text
-Online-Examination-System/
-├── app.py                    # Flask app, routes, authentication, and CLI commands
-├── models.py                 # SQLAlchemy models
-├── requirements.txt          # Python dependencies
-├── .env.example              # Example local environment configuration
-├── .gitignore
-├── README.md
-├── README.txt                # Existing project notes
-├── database/
-│   └── exam_system.sql       # Legacy MySQL schema reference
-├── scripts/
-│   └── import_mysql.py       # Copy compatible MySQL data into SQLite
-├── instance/
-│   └── .gitkeep              # Runtime database and secret-key location
-├── static/
-│   ├── css/
-│   │   └── style.css         # Application styling
-│   └── js/
-│       └── app.js            # Browser interactions and exam timer/autosave
-├── templates/                # Jinja templates for pages and role dashboards
-└── tests/
-    └── test_app.py           # Application tests
-```
-
-The SQLite database and generated development secret are runtime files under `instance/` and are excluded from Git.
-
-## ⚙️ Installation and Setup
-
-### Prerequisites
+## Requirements
 
 - Python 3.10 or later
-- Git, if cloning the repository
+- SQLite for local development (included with Python)
+- A persistent PostgreSQL database for production
+- Vercel project/account for hosting
 
-### Windows PowerShell
+## Local development (SQLite)
 
-1. Clone the repository and enter the project folder:
-
-   ```powershell
-   git clone https://github.com/Abhi210405/Online-Examination-System.git
-   Set-Location Online-Examination-System
-   ```
-
-2. Create and activate a virtual environment:
-
-   ```powershell
-   py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-   If PowerShell blocks activation, use the virtual environment’s Python directly in the commands below (for example, `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`).
-
-3. Install dependencies:
-
-   ```powershell
-   python -m pip install -r requirements.txt
-   ```
-
-4. Create a local environment file and set a private secret key:
-
-   ```powershell
-   Copy-Item .env.example .env
-   python -c "import secrets; print(secrets.token_urlsafe(48))"
-   ```
-
-   Copy the generated value into `.env` as `SECRET_KEY`. Keep `.env` private and do not commit it. The example configuration uses development mode; production requires `APP_ENV=production` and a private secret key of at least 32 characters.
-
-## ▶️ How to Run the Project
-
-1. Initialize the database:
-
-   ```powershell
-   flask --app app init-db
-   ```
-
-2. Create the first administrator using the interactive CLI prompts:
-
-   ```powershell
-   flask --app app create-admin
-   ```
-
-   Alternatively, while running locally in development and before an administrator exists, open `http://127.0.0.1:5000/setup/first-admin` and complete the one-time setup form. The page is unavailable in production.
-
-3. Start the Flask development server:
-
-   ```powershell
-   flask --app app run
-   ```
-
-4. Open [http://127.0.0.1:5000/](http://127.0.0.1:5000/) in your browser and sign in with the administrator account you created.
-
-The development server is intended for local development. For a Windows WSGI deployment, Waitress is included:
+From the repository root, create a virtual environment and install dependencies:
 
 ```powershell
-waitress-serve --host=127.0.0.1 app:app
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-For production, configure `APP_ENV=production`, a private `SECRET_KEY`, and a persistent `DATABASE_URL`; terminate TLS at a trusted reverse proxy.
+By default, the app uses `instance/college_exam_system.sqlite3`. You can leave
+`DATABASE_URL` unset or use `DATABASE_URL=sqlite:///college_exam_system.sqlite3`;
+relative SQLite paths are resolved inside `instance/`. Set a private
+`SECRET_KEY` in `.env` if you need sessions to remain valid across local
+restarts. Generate one with:
 
-## 🧪 Tests
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
-Run the application test suite from the project root:
+Apply database migrations and provision the initial administrator:
+
+```powershell
+flask --app app db upgrade
+flask --app app create-admin
+flask --app app run
+```
+
+Open <http://127.0.0.1:5000/>. The `/setup/first-admin` page remains available
+only in local development and only until an administrator exists.
+
+If `instance/college_exam_system.sqlite3` already exists from an earlier
+release, do not run the fresh-database migration command above first. Back it
+up and confirm that its tables/columns match the checked-in initial migration
+before marking it as migrated:
+
+```powershell
+flask --app app db stamp head
+flask --app app db upgrade
+```
+
+Do not stamp an empty or incompatible database. `flask --app app init-db` is a
+convenience alias for applying migrations to a fresh database.
+
+Run tests with:
 
 ```powershell
 python -m pytest
 ```
 
-## 🗃️ Database Import
+## Vercel deployment
 
-The optional importer copies an existing MySQL database into the configured SQLite database. It checks that the expected tables and columns match, stops if the destination tables are not empty, and does not modify the MySQL source. Back up your data before importing.
+The root `app.py` exports the Flask WSGI object as `app`, which Vercel's Python
+runtime detects. `vercel.json` configures the function duration and includes
+Jinja templates; files in `public/` are served as static assets by Vercel's
+CDN. No extra project directory or container is needed.
 
-Set `SOURCE_DATABASE_URL` to a SQLAlchemy MySQL URL using the PyMySQL driver, then run the importer:
+### 1. Provision production services and settings
+
+Create a PostgreSQL database reachable from Vercel (use its TLS-enabled
+connection URL; a provider's connection pooler is recommended when available).
+In Vercel Project Settings → Environment Variables, configure for **Production**
+and any other environments you intend to use:
+
+| Variable | Value |
+|---|---|
+| `APP_ENV` | `production` |
+| `SECRET_KEY` | A private random value of at least 32 characters |
+| `DATABASE_URL` | PostgreSQL connection URL from your database provider |
+| `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `*.vercel.app` |
+
+Generate a secret locally without sharing it:
 
 ```powershell
-$env:SOURCE_DATABASE_URL = "mysql+pymysql://<user>:<password>@<host>/<database>"
-python scripts\import_mysql.py
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-The destination is selected with `DATABASE_URL`; if it is not set, the application uses `instance/college_exam_system.sqlite3`. The legacy MySQL schema reference is in `database/exam_system.sql`.
+Do not put production credentials in `.env.example`, source control, build
+logs, or client-side variables. The app normalizes `postgres://` and
+`postgresql://` URLs to the installed Psycopg 3 driver. Production startup
+fails closed if the secret or database URL is missing, if the key is too short,
+or if SQLite is selected. Vercel preview deployments also require PostgreSQL;
+use an isolated preview database if you need preview data separation.
 
-## 🚀 Future Enhancements
+### 2. Apply migrations and create the first administrator
 
-Potential future improvements—not currently part of the application—include:
+Run these commands from a trusted local machine or CI job that has network
+access to the production database, with `APP_ENV`, `SECRET_KEY`, and
+`DATABASE_URL` supplied through a secure environment/secret manager:
 
-- Additional question formats beyond multiple-choice questions.
-- Downloadable result reports.
-- More detailed exam and performance analytics.
-- Email notifications for exam schedules and results.
+```powershell
+flask --app app db upgrade
+flask --app app create-admin
+```
 
-## 👤 Author
+The admin command prompts for the initial account details and password. The
+public first-admin setup page is disabled in production. Run migrations once
+per release, before directing traffic to a schema that depends on them; do not
+run schema changes from each serverless request.
 
-**Abhinandan Pandey**
+For an existing, schema-compatible production database that predates Alembic,
+take a verified backup and use `flask --app app db stamp head` instead of
+`db upgrade` for the initial baseline, then use `db upgrade` for later
+migrations. Confirm the schema matches the baseline first; stamping does not
+change or validate table structure.
 
-## 🔗 GitHub Repository
+### 3. Connect and deploy
 
-[Abhi210405/Online-Examination-System](https://github.com/Abhi210405/Online-Examination-System)
+Import this repository into Vercel and keep the project root set to this
+repository root. Vercel should detect the Python/Flask application from
+`requirements.txt` and `app.py`; keep `vercel.json` in place. Deploy using the
+Vercel Git integration or CLI:
+
+```powershell
+vercel
+vercel --prod
+```
+
+The deployment itself is not performed by this repository setup. Validate the
+production URL, login, exam creation/attempt flows, static assets, logs, and
+database connectivity after deployment.
+
+## Persistence, security, and operations
+
+- **Do not use SQLite as the Vercel production database.** Function filesystems
+  are ephemeral and may be isolated between invocations. PostgreSQL is the
+  durable system of record.
+- Use a private `SECRET_KEY` shared consistently across function instances;
+  otherwise signed browser sessions will be invalidated. Rotate it deliberately
+  because rotation signs users out.
+- Production enables secure, HTTP-only, same-site session cookies and existing
+  CSRF/security-header protections. Configure `TRUSTED_HOSTS` for custom host
+  names; the default production allowlist covers Vercel subdomains.
+- Each PostgreSQL function instance keeps a small connection pool. A managed
+  pooler can help under scale-out; review provider connection limits and
+  configure database region close to the Vercel function region.
+- Vercel's request/response functions are not persistent workers. Long exams
+  are supported by storing attempt state in PostgreSQL and autosaving answers;
+  no in-memory state is relied on.
+- Use Vercel runtime logs and the PostgreSQL provider's monitoring to diagnose
+  failures. Never log database URLs, passwords, session values, or exam secrets.
+
+## Database migrations
+
+Alembic revisions live in `migrations/versions/`. After changing models, create
+and review a migration locally:
+
+```powershell
+flask --app app db migrate -m "Describe schema change"
+flask --app app db upgrade
+```
+
+Commit reviewed migration scripts with the corresponding model changes. Schema
+changes are never automatically created on a web request.
+
+## Existing capabilities
+
+- Admin: account provisioning/status, portal statistics, examination and
+  result visibility.
+- Teacher: exam scheduling and publication, four-choice question sets, and
+  result review.
+- Student: registration, scheduled exams, timed attempts, autosave, automatic
+  deadline submission, and results.
+- Session-bound CSRF validation, role checks, password hashing/legacy bcrypt
+  verification, secure production cookies, and security headers.
+- `scripts/import_mysql.py` remains available for importing the legacy MySQL
+  schema after taking backups and configuring its source connection.

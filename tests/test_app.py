@@ -3,10 +3,9 @@ from datetime import timedelta
 
 import bcrypt
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select
 
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SECRET_KEY"] = "test-only-secret-key"
@@ -14,6 +13,60 @@ os.environ["SECRET_KEY"] = "test-only-secret-key"
 import app as application
 from app import app, db
 from models import Attempt, Exam, Option, Question, User
+
+
+def test_local_database_configuration_defaults_to_instance_sqlite(tmp_path):
+    settings = application._database_configuration(tmp_path, {})
+    url = make_url(settings["database_url"])
+
+    assert url.get_backend_name() == "sqlite"
+    assert url.database == str(tmp_path / "college_exam_system.sqlite3")
+    assert not settings["production"]
+
+
+def test_production_database_configuration_requires_persistent_postgresql(tmp_path):
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        application._database_configuration(tmp_path, {"APP_ENV": "production"})
+
+    with pytest.raises(RuntimeError, match="requires a persistent PostgreSQL"):
+        application._database_configuration(
+            tmp_path,
+            {"APP_ENV": "production", "DATABASE_URL": "sqlite:///local.sqlite3"},
+        )
+
+    settings = application._database_configuration(
+        tmp_path,
+        {
+            "APP_ENV": "production",
+            "DATABASE_URL": "postgres://user:pass@example.test/exams",
+            "TRUSTED_HOSTS": "exams.example.edu, *.vercel.app",
+        },
+    )
+    url = make_url(settings["database_url"])
+    assert url.drivername == "postgresql+psycopg"
+    assert settings["production"]
+    assert settings["engine_options"]["pool_size"] == 1
+    assert settings["trusted_hosts"] == ["exams.example.edu", "*.vercel.app"]
+
+
+def test_vercel_preview_uses_production_database_requirements(tmp_path):
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        application._database_configuration(
+            tmp_path,
+            {"VERCEL": "1", "VERCEL_ENV": "preview"},
+        )
+
+    local_vercel_settings = application._database_configuration(
+        tmp_path,
+        {"VERCEL": "1", "VERCEL_ENV": "development"},
+    )
+    assert not local_vercel_settings["production"]
+
+
+def test_static_assets_are_available_from_vercel_public_directory(client):
+    response = client.get("/static/css/style.css")
+    assert response.status_code == 200
+    assert b".topbar" in response.data
 
 
 @pytest.fixture(autouse=True)

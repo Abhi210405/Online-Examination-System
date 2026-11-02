@@ -19,6 +19,7 @@ from flask import (
     session,
     url_for,
 )
+from flask_migrate import Migrate, upgrade as run_migrations
 from sqlalchemy import event, func, select
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
@@ -31,9 +32,73 @@ from models import Answer, Attempt, Exam, Option, Question, User, db
 load_dotenv()
 
 
-def _secret_key(instance_path):
+def _is_production(environ=None):
+    environ = os.environ if environ is None else environ
+    app_env = environ.get("APP_ENV", "").lower()
+    vercel_env = environ.get("VERCEL_ENV", "production").lower()
+    is_vercel_production = environ.get("VERCEL") == "1" and vercel_env != "development"
+    return app_env == "production" or is_vercel_production
+
+
+def _normalize_database_url(database_url):
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url[len("postgres://") :]
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url[len("postgresql://") :]
+    if database_url.startswith("postgresql+psycopg2://"):
+        return "postgresql+psycopg://" + database_url[len("postgresql+psycopg2://") :]
+    return database_url
+
+
+def _database_configuration(instance_path, environ=None):
+    environ = os.environ if environ is None else environ
+    production = _is_production(environ)
+    configured_url = environ.get("DATABASE_URL")
+    if production and not configured_url:
+        raise RuntimeError("Set DATABASE_URL to a persistent PostgreSQL connection string in production.")
+
+    database_url = configured_url or f"sqlite:///{Path(instance_path) / 'college_exam_system.sqlite3'}"
+    database_url = _normalize_database_url(database_url)
+    parsed_url = make_url(database_url)
+    is_postgresql = parsed_url.get_backend_name() == "postgresql"
+    if production and not is_postgresql:
+        raise RuntimeError("Production requires a persistent PostgreSQL DATABASE_URL; SQLite is not supported.")
+    if is_postgresql and parsed_url.drivername != "postgresql+psycopg":
+        raise RuntimeError("Use a PostgreSQL URL supported by the configured Psycopg 3 driver.")
+
+    if parsed_url.get_backend_name() == "sqlite":
+        sqlite_path = parsed_url.database
+        if sqlite_path and sqlite_path != ":memory:" and not sqlite_path.startswith("file:"):
+            resolved_path = Path(sqlite_path)
+            if not resolved_path.is_absolute():
+                resolved_path = Path(instance_path) / resolved_path
+            resolved_path.parent.mkdir(parents=True, exist_ok=True)
+            database_url = parsed_url.set(database=str(resolved_path)).render_as_string(
+                hide_password=False
+            )
+
+    engine_options = {"pool_pre_ping": True}
+    if is_postgresql:
+        engine_options.update(pool_recycle=300, pool_size=1, max_overflow=0)
+    trusted_hosts = environ.get("TRUSTED_HOSTS")
+    if trusted_hosts:
+        trusted_hosts = [host.strip() for host in trusted_hosts.split(",") if host.strip()]
+    elif production:
+        trusted_hosts = ["*.vercel.app"]
+    else:
+        trusted_hosts = None
+
+    return {
+        "production": production,
+        "database_url": database_url,
+        "engine_options": engine_options,
+        "trusted_hosts": trusted_hosts,
+    }
+
+
+def _secret_key(instance_path, production=False):
     configured = os.environ.get("SECRET_KEY")
-    if os.environ.get("APP_ENV", "").lower() == "production":
+    if production:
         if not configured or len(configured) < 32:
             raise RuntimeError(
                 "Set a private SECRET_KEY of at least 32 characters when APP_ENV=production."
@@ -48,28 +113,22 @@ def _secret_key(instance_path):
     return secret_file.read_text(encoding="utf-8").strip()
 
 
-app = Flask(__name__, instance_relative_config=True)
+app = Flask(__name__, instance_relative_config=True, static_folder="public/static")
 Path(app.instance_path).mkdir(parents=True, exist_ok=True)
-database_url = os.environ.get(
-    "DATABASE_URL", f"sqlite:///{Path(app.instance_path) / 'college_exam_system.sqlite3'}"
-)
-if database_url.startswith("sqlite:"):
-    sqlite_path = make_url(database_url).database
-    if sqlite_path and sqlite_path != ":memory:" and not sqlite_path.startswith("file:"):
-        resolved_path = Path(sqlite_path)
-        if not resolved_path.is_absolute():
-            resolved_path = Path(app.instance_path) / resolved_path
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+database_config = _database_configuration(app.instance_path)
 app.config.update(
-    SECRET_KEY=_secret_key(app.instance_path),
-    SQLALCHEMY_DATABASE_URI=database_url,
+    SECRET_KEY=_secret_key(app.instance_path, database_config["production"]),
+    SQLALCHEMY_DATABASE_URI=database_config["database_url"],
+    SQLALCHEMY_ENGINE_OPTIONS=database_config["engine_options"],
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("APP_ENV", "").lower() == "production",
+    SESSION_COOKIE_SECURE=database_config["production"],
+    TRUSTED_HOSTS=database_config["trusted_hosts"],
     MAX_CONTENT_LENGTH=2 * 1024 * 1024,
 )
 db.init_app(app)
+migrate = Migrate(app, db, compare_type=True)
 
 
 @event.listens_for(Engine, "connect")
@@ -98,9 +157,6 @@ def _csrf_token():
 
 @app.before_request
 def load_user_and_check_csrf():
-    if not app.config.get("_database_initialized"):
-        db.create_all()
-        app.config["_database_initialized"] = True
     user_id = session.get("user_id")
     g.user = db.session.get(User, user_id) if user_id else None
     if g.user is not None and g.user.status != "active":
@@ -338,7 +394,7 @@ def logout():
 
 @app.route("/setup/first-admin", methods=["GET", "POST"])
 def first_admin():
-    if os.environ.get("APP_ENV", "").lower() == "production":
+    if _is_production():
         abort(404)
     if db.session.scalar(select(func.count(User.id)).where(User.role == "admin")):
         abort(404)
@@ -758,8 +814,8 @@ def student_result(attempt_id):
 
 @app.cli.command("init-db")
 def init_db_command():
-    db.create_all()
-    click.echo("Database tables are ready.")
+    run_migrations()
+    click.echo("Database migrations are up to date.")
 
 
 @app.cli.command("create-admin")
@@ -767,7 +823,6 @@ def init_db_command():
 @click.option("--email", prompt=True)
 @click.password_option()
 def create_admin_command(name, email, password):
-    db.create_all()
     if db.session.scalar(select(func.count(User.id)).where(User.role == "admin")):
         raise click.ClickException("An administrator already exists.")
     if not name.strip() or "@" not in email or len(password) < 10:
