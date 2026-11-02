@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Online examination portal{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-copy">
+    <span class="eyebrow"><span class="status-dot"></span> COLLEGE EXAMINATION PORTAL</span>
+    <h1>Make every exam<br><span>count.</span></h1>
+    <p>A focused, secure workspace for educators to create assessments and students to do their best work.</p>
+    <div class="hero-actions">
+      <a class="button button-light" href="{{ url_for('login') }}">Sign in to your portal <span aria-hidden="true">→</span></a>
+      <a class="button button-ghost" href="{{ url_for('register') }}">Create a student account</a>
+    </div>
+    <div class="hero-note"><span class="note-check">✓</span> Timed assessments <span class="note-check">✓</span> Saved answers <span class="note-check">✓</span> Instant results</div>
+  </div>
+  <div class="hero-visual" aria-hidden="true">
+    <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+    <div class="exam-card">
+      <div class="exam-card-top"><span class="mini-mark">CE</span><span class="live-pill">EXAM IN PROGRESS</span></div>
+      <div class="exam-line exam-line-wide"></div><div class="exam-line"></div>
+      <div class="answer-row answer-selected"><span>A</span><i>Selected answer</i><b>✓</b></div>
+      <div class="answer-row"><span>B</span><i>Another choice</i></div>
+      <div class="answer-row"><span>C</span><i>One more option</i></div>
+      <div class="exam-card-bottom"><span>TIME REMAINING</span><strong>24:18</strong></div>
+    </div>
+    <div class="floating-score"><span>✦</span><div><strong>Saved</strong><small>Your progress is secure</small></div></div>
+  </div>
+</section>
+<section class="welcome-row">
+  <div><span class="eyebrow eyebrow-dark">ONE PORTAL. THREE WORKSPACES.</span><h2>Everything in its right place.</h2></div>
+  <p>Purpose-built dashboards keep administrators, teachers, and students on top of what matters.</p>
+</section>
+<section class="feature-grid">
+  <article class="feature-card"><span class="feature-number">01</span><div class="feature-icon icon-blue">⌘</div><h3>Admin workspace</h3><p>Manage accounts, monitor activity, and keep the entire examination portal organized.</p><a href="{{ url_for('login') }}">Explore your dashboard <span>→</span></a></article>
+  <article class="feature-card"><span class="feature-number">02</span><div class="feature-icon icon-violet">✎</div><h3>Teacher workspace</h3><p>Build MCQ exams, schedule availability, manage questions, and review student results.</p><a href="{{ url_for('login') }}">Create an examination <span>→</span></a></article>
+  <article class="feature-card"><span class="feature-number">03</span><div class="feature-icon icon-green">◎</div><h3>Student workspace</h3><p>Find available exams, answer at your own pace, and see your submitted results.</p><a href="{{ url_for('register') }}">Join as a student <span>→</span></a></article>
+</section>
+<section class="bottom-cta"><div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Your next exam starts here.</h2></div><a class="button button-light" href="{{ url_for('login') }}">Go to sign in <span>→</span></a></section>
+{% endblock %}

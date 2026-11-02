@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Examination results{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">TEACHING WORKSPACE / RESULTS</span><h1>Student results</h1><p>Submitted scores for your examinations.</p></div><a class="button button-outline" href="{{ url_for('teacher_dashboard') }}">← Your exams</a></section>
+<section class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">SUBMITTED ATTEMPTS</span><h2>Results <span class="count-tag">{{ attempts|length }}</span></h2></div></div>
+  {% if attempts %}<div class="table-wrap"><table><thead><tr><th>Student</th><th>Examination</th><th>Score</th><th>Result</th><th>Submitted</th></tr></thead><tbody>{% for attempt in attempts %}{% set percent = (attempt.score / attempt.exam.total_marks * 100) if attempt.exam.total_marks else 0 %}<tr><td><strong>{{ attempt.student.name }}</strong><small class="table-sub">{{ attempt.student.roll_number or attempt.student.email }}</small></td><td><strong>{{ attempt.exam.title }}</strong><small class="table-sub">{{ attempt.exam.subject }}</small></td><td>{{ attempt.score }} / {{ attempt.exam.total_marks }}</td><td><span class="result-percent">{{ "%.1f"|format(percent) }}%</span></td><td><time data-local-time="{{ attempt.submitted_at.isoformat() }}">{{ attempt.submitted_at.strftime('%b %d, %Y · %H:%M') }} UTC</time></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-state"><span>▥</span><strong>No submitted attempts yet</strong><p>Student scores will appear after an exam is submitted.</p></div>{% endif %}
+</section>
+{% endblock %}

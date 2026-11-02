@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% set is_register = mode == "register" %}
+{% set is_setup = mode == "first_admin" %}
+{% block title %}{{ "Create student account" if is_register else ("Initial administrator setup" if is_setup else "Sign in") }}{% endblock %}
+{% block content %}
+<section class="auth-layout">
+  <div class="auth-aside">
+    <span class="eyebrow"><span class="status-dot"></span> CAMPUS EXAMINATION PORTAL</span>
+    <h1>{{ "Start your next chapter." if is_register else ("Set up your portal." if is_setup else "Welcome back.") }}</h1>
+    <p>{{ "Create your student account to discover examinations and track your results." if is_register else ("Create the first administrator account. This setup closes as soon as the account is created." if is_setup else "Sign in to continue to your secure examination workspace.") }}</p>
+    <div class="aside-stat"><strong>{{ "01" if is_setup else "03" }}</strong><span>{{ "One-time setup" if is_setup else "Dedicated role-based workspaces" }}</span></div>
+  </div>
+  <div class="auth-card">
+    <div class="auth-card-heading"><span class="eyebrow eyebrow-dark">{{ "NEW STUDENT" if is_register else ("FIRST-TIME SETUP" if is_setup else "SECURE ACCESS") }}</span><h2>{{ "Create your account" if is_register else ("Create administrator" if is_setup else "Sign in") }}</h2><p>{{ "All fields are required." if is_register or is_setup else "Use the email and password associated with your account." }}</p></div>
+    <form method="post" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if is_register or is_setup %}
+        <label>Full name<input name="name" autocomplete="name" maxlength="120" required autofocus></label>
+        <label>Email address<input name="email" type="email" autocomplete="email" maxlength="190" required></label>
+      {% endif %}
+      {% if is_register %}
+        <div class="form-pair"><label>Roll number<input name="roll_number" maxlength="50" required></label><label>Department<input name="department" maxlength="100" placeholder="e.g. Computer Science" required></label></div>
+      {% endif %}
+      {% if not is_register and not is_setup %}
+        <label>Email address<input name="email" type="email" autocomplete="username" required autofocus></label>
+      {% endif %}
+      {% if not is_register and not is_setup %}
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      {% elif is_register %}
+        <label>Password <span class="label-hint">At least 8 characters</span><input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      {% endif %}
+      {% if is_setup %}<label>Password <span class="label-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>{% endif %}
+      <button class="button button-primary button-full" type="submit">{{ "Create student account" if is_register else ("Create administrator" if is_setup else "Sign in securely") }} <span>→</span></button>
+    </form>
+    <div class="auth-switch">{% if is_register %}Already registered? <a href="{{ url_for('login') }}">Sign in</a>{% elif is_setup %}<a href="{{ url_for('login') }}">Return to sign in</a>{% else %}New student? <a href="{{ url_for('register') }}">Create an account</a>{% endif %}</div>
+  </div>
+</section>
+{% endblock %}

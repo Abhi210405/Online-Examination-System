@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Student dashboard{% endblock %}
+{% block content %}
+<section class="student-welcome"><div><span class="eyebrow eyebrow-dark">STUDENT PORTAL</span><h1>Ready when you are, {{ current_user().name.split()[0] }}.</h1><p>Find your next exam, pick up where you left off, or check a recent result.</p></div><div class="welcome-avatar">{{ current_user().name[:1]|upper }}</div></section>
+<section class="student-summary"><div class="summary-label"><span class="summary-dot"></span>{{ exams|length }} examination{{ "s" if exams|length != 1 else "" }} published</div><a class="text-link" href="{{ url_for('student_results') }}">View my results →</a></section>
+<section class="exam-card-grid">{% for exam in exams %}{% set attempt = attempts.get(exam.id) %}{% set not_started = exam.start_at and exam.start_at > now %}{% set expired = exam.end_at and exam.end_at < now %}{% set question_count = exam.questions|length %}
+  <article class="student-exam-card"><div class="exam-card-heading"><span class="exam-subject">{{ exam.subject }}</span>{% if attempt and attempt.submitted_at %}<span class="pill pill-submitted">Submitted</span>{% elif attempt %}<span class="pill pill-in-progress">In progress</span>{% elif not_started %}<span class="pill pill-scheduled">Scheduled</span>{% elif expired %}<span class="pill pill-closed">Closed</span>{% else %}<span class="pill pill-published">Available</span>{% endif %}</div><h2>{{ exam.title }}</h2><p class="student-exam-desc">{{ exam.description or "Your examination is ready. Review the instructions before you begin." }}</p><div class="exam-meta"><span><b>◷</b> {{ exam.duration_minutes }} min</span><span><b>✎</b> {{ question_count }} questions</span><span><b>◎</b> {{ exam.total_marks }} points</span></div><div class="exam-card-footer">
+    {% if attempt and attempt.submitted_at %}<a class="button button-outline button-sm" href="{{ url_for('student_result', attempt_id=attempt.id) }}">View result →</a>
+    {% elif attempt %}<a class="button button-primary button-sm" href="{{ url_for('take_exam', attempt_id=attempt.id) }}">Continue exam →</a>
+    {% elif not_started %}<span class="muted-text">Opens <time data-local-time="{{ exam.start_at.isoformat() }}">{{ exam.start_at.strftime('%b %d at %H:%M') }} UTC</time></span>
+    {% elif expired or exam.status != "published" %}<span class="muted-text">No longer available</span>
+    {% elif question_count == 0 %}<span class="muted-text">Questions are being prepared</span>
+    {% else %}<a class="button button-primary button-sm" href="{{ url_for('exam_instructions', exam_id=exam.id) }}">View exam →</a>{% endif %}
+  </div></article>
+{% else %}<div class="empty-state panel empty-wide"><span>▤</span><strong>No published examinations</strong><p>When your teachers publish an exam, it will appear here.</p></div>{% endfor %}</section>
+{% endblock %}

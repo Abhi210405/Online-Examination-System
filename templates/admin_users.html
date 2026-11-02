@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Manage accounts{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ADMINISTRATION / ACCOUNTS</span><h1>People & permissions</h1><p>Create staff accounts and manage access to the portal.</p></div><a class="button button-outline" href="{{ url_for('admin_dashboard') }}">← Dashboard</a></section>
+<section class="content-grid admin-users-grid">
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">NEW STAFF ACCOUNT</span><h2>Invite a colleague</h2></div></div>
+    <form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Full name<input name="name" maxlength="120" required></label>
+      <label>Email address<input name="email" type="email" maxlength="190" required></label>
+      <label>Temporary password <span class="label-hint">At least 8 characters</span><input name="password" type="password" minlength="8" required></label>
+      <label>Role<select name="role" required><option value="teacher">Teacher</option><option value="admin">Administrator</option></select></label>
+      <button class="button button-primary" type="submit">Create account <span>→</span></button>
+    </form>
+  </article>
+  <article class="panel panel-main"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">PORTAL DIRECTORY</span><h2>All accounts <span class="count-tag">{{ users|length }}</span></h2></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+      {% for user in users %}<tr><td><strong>{{ user.name }}</strong><small class="table-sub">{{ user.email }}</small></td><td><span class="role-tag">{{ user.role|title }}</span></td><td><span class="pill pill-{{ user.status }}">{{ user.status|title }}</span></td><td><time data-local-time="{{ user.created_at.isoformat() }}" data-date-only>{{ user.created_at.strftime('%b %d, %Y') }} UTC</time></td><td>{% if user.id != current_user().id %}<form action="{{ url_for('update_user_status', user_id=user.id) }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="table-action" type="submit" data-confirm="Change {{ user.name }}'s account status?">{{ "Deactivate" if user.status == "active" else "Activate" }}</button></form>{% else %}<span class="muted-text">You</span>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="5"><div class="empty-state"><strong>No accounts yet</strong><p>Create a teacher account to get started.</p></div></td></tr>{% endfor %}
+    </tbody></table></div>
+  </article>
+</section>
+{% endblock %}

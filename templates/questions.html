@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Question set · {{ exam.title }}{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">QUESTION BUILDER</span><h1>{{ exam.title }}</h1><p>{{ exam.subject }} <span class="separator-dot">·</span> {{ exam.questions|length }} question{{ "s" if exam.questions|length != 1 else "" }} <span class="separator-dot">·</span> {{ exam.duration_minutes }} minutes</p></div><a class="button button-outline" href="{{ url_for('teacher_dashboard') }}">← Your exams</a></section>
+<section class="content-grid question-layout">
+  <article class="panel">{% if questions_locked %}<div class="info-banner">This question set is locked because at least one student has started the examination.</div>{% else %}<div class="panel-heading"><div><span class="eyebrow eyebrow-dark">NEW QUESTION</span><h2>Write a question</h2></div><span class="feature-icon icon-violet">✎</span></div>
+    <form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Question text<textarea name="question_text" rows="3" maxlength="5000" placeholder="Enter the question students will answer…" required></textarea></label>
+      <div class="choice-fields"><label><span>A</span><input name="options" maxlength="2000" placeholder="First choice" required></label><label><span>B</span><input name="options" maxlength="2000" placeholder="Second choice" required></label><label><span>C</span><input name="options" maxlength="2000" placeholder="Third choice" required></label><label><span>D</span><input name="options" maxlength="2000" placeholder="Fourth choice" required></label></div>
+      <div class="form-pair"><label>Points<input type="number" name="marks" min="0.5" max="9999.99" step="0.5" value="1" required></label><label>Correct choice<select name="correct_index" required><option value="">Select the correct answer</option><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label></div>
+      <button class="button button-primary" type="submit">Add question <span>＋</span></button>
+    </form>
+  {% endif %}</article>
+  <aside class="panel question-list-panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">QUESTION SET</span><h2>{{ exam.questions|length }} added</h2></div></div>
+    {% if exam.questions %}<ol class="question-list">{% for question in exam.questions %}<li><div class="question-list-index">{{ "%02d"|format(loop.index) }}</div><div class="question-list-body"><p>{{ question.question_text }}</p><small>{{ question.marks }} point{{ "s" if question.marks != 1 else "" }} · {{ question.options|length }} choices</small></div><form method="post" action="{{ url_for('delete_question', question_id=question.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-button" type="submit" aria-label="Delete question" title="Delete question" data-confirm="Remove this question?">×</button></form></li>{% endfor %}</ol>{% else %}<div class="empty-state"><span>✎</span><strong>No questions added</strong><p>Add your first question to complete this exam.</p></div>{% endif %}
+    {% if exam.questions %}<a class="button button-primary button-full question-done" href="{{ url_for('teacher_dashboard') }}">Done building questions <span>→</span></a>{% endif %}
+  </aside>
+</section>
+{% endblock %}

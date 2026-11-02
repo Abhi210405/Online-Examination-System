@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}{{ error.code }} · {{ error.name }}{% endblock %}
+{% block content %}
+<section class="error-page"><span class="eyebrow eyebrow-dark">CAMPUS EXAMINATION PORTAL</span><div class="error-code">{{ error.code }}</div><h1>{{ error.name }}</h1><p>{{ error.description }}</p><a class="button button-primary" href="{{ url_for('dashboard') if current_user() else url_for('home') }}">Return to safety <span>→</span></a></section>
+{% endblock %}

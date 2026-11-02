@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#111a32">
+  <title>{% block title %}CampusExam{% endblock %} · CampusExam</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('home') }}"><span class="brand-mark">C</span><span>campus<span class="brand-accent">exam</span></span></a>
+    <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" data-nav-toggle>☰</button>
+    <nav class="topnav" data-topnav>
+      {% if current_user() %}
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+        {% if current_user().role in ['teacher', 'admin'] %}
+          <a href="{{ url_for('teacher_results') }}">Results</a>
+        {% elif current_user().role == 'student' %}
+          <a href="{{ url_for('student_results') }}">My results</a>
+        {% endif %}
+        {% if current_user().role == 'admin' %}
+          <a href="{{ url_for('admin_users') }}">Users</a>
+        {% endif %}
+        <span class="nav-user"><span class="avatar">{{ current_user().name[:1]|upper }}</span><span>{{ current_user().name }}<small>{{ current_user().role|title }}</small></span></span>
+        <form action="{{ url_for('logout') }}" method="post" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="nav-logout" type="submit">Sign out</button>
+        </form>
+      {% else %}
+        <a href="{{ url_for('login') }}">Sign in</a>
+        <a class="button button-sm" href="{{ url_for('register') }}">Student registration</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="page-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-stack" aria-live="polite">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer"><span>© {{ utcnow().year }} CampusExam</span><span>College examination management</span></footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
