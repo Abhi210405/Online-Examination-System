@@ -80,7 +80,13 @@ def _database_configuration(instance_path, environ=None):
 
     engine_options = {"pool_pre_ping": True}
     if is_postgresql:
-        engine_options.update(pool_recycle=300, pool_size=1, max_overflow=0)
+        engine_options.update(
+            pool_recycle=300,
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=10,
+            connect_args={"connect_timeout": 10},
+        )
     trusted_hosts = environ.get("TRUSTED_HOSTS")
     if trusted_hosts:
         trusted_hosts = [host.strip() for host in trusted_hosts.split(",") if host.strip()]
@@ -102,7 +108,7 @@ def _secret_key(instance_path, production=False):
     if production:
         if not configured or len(configured) < 32:
             raise RuntimeError(
-                "Set a private SECRET_KEY of at least 32 characters when APP_ENV=production."
+                "Set a private SECRET_KEY of at least 32 characters in production."
             )
         return configured
     if configured:
@@ -115,8 +121,9 @@ def _secret_key(instance_path, production=False):
 
 
 app = Flask(__name__, instance_relative_config=True, static_folder=None)
-Path(app.instance_path).mkdir(parents=True, exist_ok=True)
 database_config = _database_configuration(app.instance_path)
+if not database_config["production"]:
+    Path(app.instance_path).mkdir(parents=True, exist_ok=True)
 app.config.update(
     SECRET_KEY=_secret_key(app.instance_path, database_config["production"]),
     SQLALCHEMY_DATABASE_URI=database_config["database_url"],

@@ -7,7 +7,8 @@ The existing features and database models are retained.
 
 ## Requirements
 
-- Python 3.10 or later
+- Python 3.10 or later for local development
+- Python 3.12 for Vercel (pinned in `.python-version`)
 - SQLite for local development (included with Python)
 - A persistent PostgreSQL database for production
 - Vercel project/account for hosting
@@ -65,17 +66,20 @@ python -m pytest
 
 ## Vercel deployment
 
-The root `app.py` exports the Flask WSGI object as `app`, which Vercel's Python
-runtime detects. `vercel.json` configures the function duration and includes
-Jinja templates; files in `public/` are served as static assets by Vercel's
-CDN. No extra project directory or container is needed.
+The repository root is the Vercel project root. The root `app.py` exports the
+Flask WSGI object as `app`, which Vercel's Python runtime imports; the
+development server is only started when `app.py` is run directly. `.python-version`
+pins the Vercel runtime to Python 3.12. `vercel.json` configures the function
+duration and includes Jinja templates; files in `public/` are served as static
+assets by Vercel's CDN. Leave the build command and output directory at their
+Vercel defaults; no separate build step or container is required.
 
 ### 1. Provision production services and settings
 
 Create a PostgreSQL database reachable from Vercel (use its TLS-enabled
 connection URL; a provider's connection pooler is recommended when available).
 In Vercel Project Settings → Environment Variables, configure for **Production**
-and any other environments you intend to use:
+and any Preview environments you intend to use:
 
 | Variable | Value |
 |---|---|
@@ -83,6 +87,14 @@ and any other environments you intend to use:
 | `SECRET_KEY` | A private random value of at least 32 characters |
 | `DATABASE_URL` | PostgreSQL connection URL from your database provider |
 | `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `*.vercel.app` |
+
+`SECRET_KEY` and `DATABASE_URL` are required for every Vercel deployment
+environment. `APP_ENV=production` is recommended; Vercel production and preview
+environments are also recognized automatically. The application intentionally
+fails at import when its production secret or persistent PostgreSQL URL is
+missing. That startup failure is surfaced by Vercel as a function invocation
+error, so configure these variables before testing a deployment. Do not enter
+example or local SQLite URLs as production database credentials.
 
 Generate a secret locally without sharing it:
 
@@ -121,19 +133,23 @@ change or validate table structure.
 
 ### 3. Connect and deploy
 
-Import this repository into Vercel and keep the project root set to this
-repository root. Vercel should detect the Python/Flask application from
-`requirements.txt` and `app.py`; keep `vercel.json` in place. Deploy using the
-Vercel Git integration or CLI:
+Import this repository into Vercel, select the `main` branch, and keep the
+project root set to this repository root (not a subfolder). Use the default
+Python/Other framework detection, leave Build Command and Output Directory
+unset, and keep `vercel.json`, `.python-version`, and `requirements.txt` in the
+root. Deploy using the Vercel Git integration or CLI:
 
 ```powershell
 vercel
 vercel --prod
 ```
 
-The deployment itself is not performed by this repository setup. Validate the
-production URL, login, exam creation/attempt flows, static assets, logs, and
-database connectivity after deployment.
+The repository does not contain Vercel credentials, a PostgreSQL service
+connection, or access to Vercel project settings. Configure the environment
+variables and database in their respective provider dashboards, then deploy.
+Apply migrations once from a trusted environment before sending traffic.
+Validate the production URL, login, exam creation/attempt flows, static assets,
+logs, and database connectivity after deployment.
 
 ## Persistence, security, and operations
 
@@ -147,8 +163,10 @@ database connectivity after deployment.
   CSRF/security-header protections. Configure `TRUSTED_HOSTS` for custom host
   names; the default production allowlist covers Vercel subdomains.
 - Each PostgreSQL function instance keeps a small connection pool. A managed
-  pooler can help under scale-out; review provider connection limits and
-  configure database region close to the Vercel function region.
+  pooler can help under scale-out; the application limits each instance to one
+  pooled connection, uses a 10-second pool/connect timeout, and recycles
+  connections. Review provider connection limits and configure the database
+  region close to the Vercel function region.
 - Vercel's request/response functions are not persistent workers. Long exams
   are supported by storing attempt state in PostgreSQL and autosaving answers;
   no in-memory state is relied on.

@@ -46,6 +46,9 @@ def test_production_database_configuration_requires_persistent_postgresql(tmp_pa
     assert url.drivername == "postgresql+psycopg"
     assert settings["production"]
     assert settings["engine_options"]["pool_size"] == 1
+    assert settings["engine_options"]["max_overflow"] == 0
+    assert settings["engine_options"]["pool_timeout"] == 10
+    assert settings["engine_options"]["connect_args"] == {"connect_timeout": 10}
     assert settings["trusted_hosts"] == ["exams.example.edu", "*.vercel.app"]
 
 
@@ -61,6 +64,23 @@ def test_vercel_preview_uses_production_database_requirements(tmp_path):
         {"VERCEL": "1", "VERCEL_ENV": "development"},
     )
     assert not local_vercel_settings["production"]
+
+
+def test_production_secret_key_does_not_require_instance_filesystem(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "a" * 48)
+    instance_path = tmp_path / "read-only-instance"
+
+    assert application._secret_key(instance_path, production=True) == "a" * 48
+    assert not instance_path.exists()
+
+
+def test_production_secret_key_requires_a_private_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    instance_path = tmp_path / "instance"
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        application._secret_key(instance_path, production=True)
+    assert not instance_path.exists()
 
 
 def test_static_assets_are_available_from_vercel_public_directory(client):
