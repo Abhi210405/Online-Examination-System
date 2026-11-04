@@ -16,6 +16,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -113,7 +114,7 @@ def _secret_key(instance_path, production=False):
     return secret_file.read_text(encoding="utf-8").strip()
 
 
-app = Flask(__name__, instance_relative_config=True, static_folder="public/static")
+app = Flask(__name__, instance_relative_config=True, static_folder=None)
 Path(app.instance_path).mkdir(parents=True, exist_ok=True)
 database_config = _database_configuration(app.instance_path)
 app.config.update(
@@ -129,6 +130,11 @@ app.config.update(
 )
 db.init_app(app)
 migrate = Migrate(app, db, compare_type=True)
+
+
+@app.get("/static/<path:filename>", endpoint="static")
+def static_assets(filename):
+    return send_from_directory(Path(app.root_path) / "public" / "static", filename)
 
 
 @event.listens_for(Engine, "connect")
