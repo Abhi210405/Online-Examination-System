@@ -96,6 +96,13 @@ missing. That startup failure is surfaced by Vercel as a function invocation
 error, so configure these variables before testing a deployment. Do not enter
 example or local SQLite URLs as production database credentials.
 
+For Neon, set `DATABASE_URL` to the **complete connection URI copied from
+Neon's dashboard**, not the text `DATABASE_URL`, a placeholder, or a hostname
+alone. It must use a PostgreSQL scheme such as `postgresql://` (Neon's URI
+typically includes `sslmode=require`). The application converts that scheme to
+the installed Psycopg 3 SQLAlchemy driver. Do not paste the connection URI or
+password into source files, commits, or chat.
+
 Generate a secret locally without sharing it:
 
 ```powershell

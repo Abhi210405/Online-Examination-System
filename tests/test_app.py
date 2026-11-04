@@ -66,6 +66,30 @@ def test_vercel_preview_uses_production_database_requirements(tmp_path):
     assert not local_vercel_settings["production"]
 
 
+def test_neon_postgresql_url_uses_psycopg_and_preserves_ssl_options(tmp_path):
+    settings = application._database_configuration(
+        tmp_path,
+        {
+            "APP_ENV": "production",
+            "DATABASE_URL": "postgresql://exam_user:fake-password@ep-example.neon.tech/exams?sslmode=require",
+        },
+    )
+    url = make_url(settings["database_url"])
+
+    assert url.drivername == "postgresql+psycopg"
+    assert url.host == "ep-example.neon.tech"
+    assert url.database == "exams"
+    assert url.query["sslmode"] == "require"
+
+
+def test_production_database_configuration_rejects_variable_name_as_url(tmp_path):
+    with pytest.raises(RuntimeError, match="complete PostgreSQL connection URI"):
+        application._database_configuration(
+            tmp_path,
+            {"APP_ENV": "production", "DATABASE_URL": "DATABASE_URL"},
+        )
+
+
 def test_production_secret_key_does_not_require_instance_filesystem(tmp_path, monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "a" * 48)
     instance_path = tmp_path / "read-only-instance"

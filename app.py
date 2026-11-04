@@ -23,7 +23,7 @@ from flask import (
 from flask_migrate import Migrate, upgrade as run_migrations
 from sqlalchemy import event, func, select
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import ArgumentError, IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 import bcrypt
 
@@ -60,7 +60,14 @@ def _database_configuration(instance_path, environ=None):
 
     database_url = configured_url or f"sqlite:///{Path(instance_path) / 'college_exam_system.sqlite3'}"
     database_url = _normalize_database_url(database_url)
-    parsed_url = make_url(database_url)
+    try:
+        parsed_url = make_url(database_url)
+    except ArgumentError as error:
+        if production:
+            raise RuntimeError(
+                "DATABASE_URL must be a complete PostgreSQL connection URI; copy the full URL from your database provider."
+            ) from error
+        raise
     is_postgresql = parsed_url.get_backend_name() == "postgresql"
     if production and not is_postgresql:
         raise RuntimeError("Production requires a persistent PostgreSQL DATABASE_URL; SQLite is not supported.")
