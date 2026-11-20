@@ -98,7 +98,7 @@ def _database_configuration(instance_path, environ=None):
     if trusted_hosts:
         trusted_hosts = [host.strip() for host in trusted_hosts.split(",") if host.strip()]
     elif production:
-        trusted_hosts = ["*.vercel.app"]
+        trusted_hosts = [".vercel.app"]
     else:
         trusted_hosts = None
 

@@ -86,7 +86,7 @@ and any Preview environments you intend to use:
 | `APP_ENV` | `production` |
 | `SECRET_KEY` | A private random value of at least 32 characters |
 | `DATABASE_URL` | PostgreSQL connection URL from your database provider |
-| `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `*.vercel.app` |
+| `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `.vercel.app` (Werkzeug suffix syntax) |
 
 `SECRET_KEY` and `DATABASE_URL` are required for every Vercel deployment
 environment. `APP_ENV=production` is recommended; Vercel production and preview

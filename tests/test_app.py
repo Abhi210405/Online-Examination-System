@@ -39,7 +39,7 @@ def test_production_database_configuration_requires_persistent_postgresql(tmp_pa
         {
             "APP_ENV": "production",
             "DATABASE_URL": "postgres://user:pass@example.test/exams",
-            "TRUSTED_HOSTS": "exams.example.edu, *.vercel.app",
+            "TRUSTED_HOSTS": "exams.example.edu, .vercel.app",
         },
     )
     url = make_url(settings["database_url"])
@@ -49,7 +49,26 @@ def test_production_database_configuration_requires_persistent_postgresql(tmp_pa
     assert settings["engine_options"]["max_overflow"] == 0
     assert settings["engine_options"]["pool_timeout"] == 10
     assert settings["engine_options"]["connect_args"] == {"connect_timeout": 10}
-    assert settings["trusted_hosts"] == ["exams.example.edu", "*.vercel.app"]
+    assert settings["trusted_hosts"] == ["exams.example.edu", ".vercel.app"]
+
+
+def test_vercel_production_allows_deployment_subdomains(tmp_path, client, monkeypatch):
+    settings = application._database_configuration(
+        tmp_path,
+        {
+            "VERCEL": "1",
+            "VERCEL_ENV": "production",
+            "DATABASE_URL": "postgres://user:pass@example.test/exams",
+        },
+    )
+
+    assert settings["trusted_hosts"] == [".vercel.app"]
+    monkeypatch.setitem(app.config, "TRUSTED_HOSTS", settings["trusted_hosts"])
+    response = client.get(
+        "/",
+        headers={"Host": "online-examination-system-preview.vercel.app"},
+    )
+    assert response.status_code == 200
 
 
 def test_vercel_preview_uses_production_database_requirements(tmp_path):
