@@ -377,31 +377,72 @@ def register():
     return render_template("auth_form.html", mode="register")
 
 
+def _login_user(requested_role=None):
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    requested_role = request.form.get("role") or requested_role
+    user = db.session.scalar(select(User).where(func.lower(User.email) == email))
+    password_matches = False
+    if user and user.status == "active":
+        stored_hash = user.password_hash
+        if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
+            password_matches = bcrypt.checkpw(password.encode()[:72], stored_hash.encode())
+        else:
+            password_matches = check_password_hash(stored_hash, password)
+    if not password_matches:
+        flash("Invalid email or password, or this account is inactive.", "error")
+        return None
+    if requested_role and user.role != requested_role:
+        flash("This account does not belong to the selected sign-in role.", "error")
+        return None
+    if user.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        user.password_hash = generate_password_hash(password)
+        db.session.commit()
+    session.clear()
+    session["user_id"] = user.id
+    _csrf_token()
+    return user
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if current_user():
         return redirect(_dashboard_for(current_user()))
+    requested_role = request.args.get("role")
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
-        user = db.session.scalar(select(User).where(func.lower(User.email) == email))
-        password_matches = False
-        if user and user.status == "active":
-            stored_hash = user.password_hash
-            if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
-                password_matches = bcrypt.checkpw(password.encode()[:72], stored_hash.encode())
-            else:
-                password_matches = check_password_hash(stored_hash, password)
-        if password_matches:
-            if user.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
-                user.password_hash = generate_password_hash(password)
-                db.session.commit()
-            session.clear()
-            session["user_id"] = user.id
-            _csrf_token()
+        user = _login_user(requested_role=requested_role)
+        if user is not None:
             return redirect(_dashboard_for(user))
-        flash("Invalid email or password, or this account is inactive.", "error")
-    return render_template("auth_form.html", mode="login")
+    return render_template("auth_form.html", mode="login", selected_role=requested_role)
+
+
+@app.route("/student/login", methods=["GET", "POST"])
+def student_login():
+    if current_user():
+        return redirect(_dashboard_for(current_user()))
+    return login_for_role("student")
+
+
+@app.route("/teacher/login", methods=["GET", "POST"])
+def teacher_login():
+    if current_user():
+        return redirect(_dashboard_for(current_user()))
+    return login_for_role("teacher")
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if current_user():
+        return redirect(_dashboard_for(current_user()))
+    return login_for_role("admin")
+
+
+def login_for_role(role):
+    if request.method == "POST":
+        user = _login_user(requested_role=role)
+        if user is not None:
+            return redirect(_dashboard_for(user))
+    return render_template("auth_form.html", mode="login", selected_role=role)
 
 
 @app.post("/logout")

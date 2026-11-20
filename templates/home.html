@@ -7,8 +7,9 @@
     <h1>Make every exam<br><span>count.</span></h1>
     <p>A focused, secure workspace for educators to create assessments and students to do their best work.</p>
     <div class="hero-actions">
-      <a class="button button-light" href="{{ url_for('login') }}">Sign in to your portal <span aria-hidden="true">→</span></a>
-      <a class="button button-ghost" href="{{ url_for('register') }}">Create a student account</a>
+      <a class="button button-light" href="{{ url_for('login') }}">Student sign in <span aria-hidden="true">→</span></a>
+      <a class="button button-ghost" href="{{ url_for('teacher_login') }}">Teacher login</a>
+      <a class="button button-ghost" href="{{ url_for('admin_login') }}">Admin login</a>
     </div>
     <div class="hero-note"><span class="note-check">✓</span> Timed assessments <span class="note-check">✓</span> Saved answers <span class="note-check">✓</span> Instant results</div>
   </div>

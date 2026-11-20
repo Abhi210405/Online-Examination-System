@@ -30,7 +30,9 @@
           <button class="nav-logout" type="submit">Sign out</button>
         </form>
       {% else %}
-        <a href="{{ url_for('login') }}">Sign in</a>
+        <a href="{{ url_for('login') }}">Student sign in</a>
+        <a href="{{ url_for('teacher_login') }}">Teacher login</a>
+        <a href="{{ url_for('admin_login') }}">Admin login</a>
         <a class="button button-sm" href="{{ url_for('register') }}">Student registration</a>
       {% endif %}
     </nav>

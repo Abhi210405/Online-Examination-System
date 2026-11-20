@@ -228,6 +228,40 @@ def test_public_admin_setup_is_disabled_in_production(client, monkeypatch):
     assert client.get("/setup/first-admin").status_code == 404
 
 
+def test_role_specific_login_routes_work_for_teacher_and_admin():
+    teacher_client = app.test_client()
+    admin_client = app.test_client()
+
+    create_user("Teacher", "teacher@example.test", "teacher", "teacher-password")
+    create_user("Admin", "admin@example.test", "admin", "admin-password")
+
+    teacher_client.get("/teacher/login")
+    teacher_response = teacher_client.post(
+        "/teacher/login",
+        data={
+            "csrf_token": csrf_for(teacher_client),
+            "email": "teacher@example.test",
+            "password": "teacher-password",
+        },
+        follow_redirects=False,
+    )
+    assert teacher_response.status_code == 302
+    assert teacher_response.location.endswith("/teacher")
+
+    admin_client.get("/admin/login")
+    admin_response = admin_client.post(
+        "/admin/login",
+        data={
+            "csrf_token": csrf_for(admin_client),
+            "email": "admin@example.test",
+            "password": "admin-password",
+        },
+        follow_redirects=False,
+    )
+    assert admin_response.status_code == 302
+    assert admin_response.location.endswith("/admin")
+
+
 def test_admin_can_create_staff_and_deactivate_account(client):
     admin_id = create_user("Admin", "admin@example.test", "admin")
     login(client, "admin@example.test")
