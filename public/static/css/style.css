@@ -21,6 +21,7 @@ button{color:inherit}
 .nav-toggle{display:none;font-size:20px}
 .page-shell{max-width:1200px;min-height:calc(100vh - 146px);margin:0 auto;padding:36px 32px 64px}
 .footer{max-width:1200px;margin:0 auto;padding:22px 32px 30px;border-top:1px solid #e8ebf1;color:#9098a8;display:flex;justify-content:space-between;font-size:11px}
+.footer-watermark{color:#aab1bf;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
 .flash-stack{display:grid;gap:9px;margin:0 0 20px}
 .flash{padding:12px 15px;border-radius:10px;font-weight:600;font-size:13px;border:1px solid #d5eee4;background:#eef9f4;color:#187456}
 .flash-error{border-color:#f4d7d9;background:#fff2f2;color:#ad3945}
