@@ -149,6 +149,9 @@ td strong{color:#303b55;font-size:11px}
 .role-tag{background:#f0f1ff;color:#5a66ba}
 .table-action{padding:0;border:0;background:transparent;color:#5368d7;font-size:10px;font-weight:700;cursor:pointer}
 .table-action:hover{text-decoration:underline}
+.table-action-danger{color:#b94652}
+.password-reset-form{display:flex;align-items:center;gap:6px}
+.table-password-input{width:105px;height:28px;padding:4px 7px;border:1px solid #dde1ea;border-radius:6px;font-size:9px}
 .table-actions{display:flex;gap:12px}
 .muted-text{color:#929aab;font-size:10px}
 .empty-state{min-height:190px;padding:25px 12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}

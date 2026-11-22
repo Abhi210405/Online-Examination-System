@@ -548,6 +548,53 @@ def update_user_status(user_id):
     return redirect(url_for("admin_users"))
 
 
+@app.post("/admin/users/<int:user_id>/password")
+@roles_required("admin")
+def reset_user_password(user_id):
+    user = db.get_or_404(User, user_id)
+    password = request.form.get("password", "")
+    if len(password) < 8:
+        flash("The new password must contain at least 8 characters.", "error")
+    else:
+        user.password_hash = generate_password_hash(password)
+        user.status = "active"
+        db.session.commit()
+        flash(f"{user.name}'s temporary password is set to: {password}")
+    return redirect(url_for("admin_users"))
+
+
+@app.post("/admin/users/<int:user_id>/delete")
+@roles_required("admin")
+def delete_user(user_id):
+    user = db.get_or_404(User, user_id)
+    if user.id == current_user().id:
+        flash("You cannot delete your own administrator account.", "error")
+        return redirect(url_for("admin_users"))
+
+    created_exam_ids = select(Exam.id).where(Exam.created_by == user.id)
+    affected_attempt_ids = select(Attempt.id).where(
+        (Attempt.student_id == user.id) | Attempt.exam_id.in_(created_exam_ids)
+    )
+    db.session.execute(Answer.__table__.delete().where(Answer.attempt_id.in_(affected_attempt_ids)))
+    db.session.execute(Attempt.__table__.delete().where(
+        (Attempt.student_id == user.id) | Attempt.exam_id.in_(created_exam_ids)
+    ))
+
+    affected_question_ids = select(Question.id).where(Question.exam_id.in_(created_exam_ids))
+    db.session.execute(
+        Answer.__table__.delete().where(Answer.question_id.in_(affected_question_ids))
+    )
+    db.session.execute(
+        Option.__table__.delete().where(Option.question_id.in_(affected_question_ids))
+    )
+    db.session.execute(Question.__table__.delete().where(Question.exam_id.in_(created_exam_ids)))
+    db.session.execute(Exam.__table__.delete().where(Exam.created_by == user.id))
+    db.session.delete(user)
+    db.session.commit()
+    flash(f"{user.name}'s account was deleted.")
+    return redirect(url_for("admin_users"))
+
+
 @app.get("/teacher")
 @roles_required("teacher", "admin")
 def teacher_dashboard():

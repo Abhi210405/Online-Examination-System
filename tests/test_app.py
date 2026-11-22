@@ -311,6 +311,32 @@ def test_admin_can_create_staff_and_deactivate_account(client):
         assert db.session.get(User, admin_id).status == "active"
 
 
+def test_admin_can_reset_password_and_delete_account(client):
+    admin_id = create_user("Admin", "admin@example.test", "admin")
+    target_id = create_user("Target Teacher", "target@example.test", "teacher")
+    login(client, "admin@example.test")
+
+    response = client.post(
+        f"/admin/users/{target_id}/password",
+        data={"csrf_token": csrf_for(client), "password": "new-temporary-password"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    with app.app_context():
+        target = db.session.get(User, target_id)
+        assert application.check_password_hash(target.password_hash, "new-temporary-password")
+        assert db.session.get(User, admin_id).status == "active"
+
+    response = client.post(
+        f"/admin/users/{target_id}/delete",
+        data={"csrf_token": csrf_for(client)},
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(User, target_id) is None
+        assert db.session.get(User, admin_id) is not None
+
+
 def test_student_registration_and_role_dashboards(client):
     client.get("/register")
     response = client.post(
