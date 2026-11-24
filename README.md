@@ -86,8 +86,8 @@ and any Preview environments you intend to use:
 | `APP_ENV` | `production` |
 | `SECRET_KEY` | A private random value of at least 32 characters |
 | `DATABASE_URL` | PostgreSQL connection URL from your database provider |
-| `OPENAI_API_KEY` | Optional OpenAI API key to enable AI-generated exam questions |
-| `OPENAI_MODEL` | Optional OpenAI chat-completions model; defaults to `gpt-4o-mini` |
+| `GEMINI_API_KEY` | Optional Google Gemini API key to enable AI-generated exam questions |
+| `GEMINI_MODEL` | Optional Gemini model; defaults to `gemini-3.6-flash` |
 | `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `.vercel.app` (Werkzeug suffix syntax) |
 
 `SECRET_KEY` and `DATABASE_URL` are required for every Vercel deployment
@@ -118,7 +118,7 @@ fails closed if the secret or database URL is missing, if the key is too short,
 or if SQLite is selected. Vercel preview deployments also require PostgreSQL;
 use an isolated preview database if you need preview data separation.
 
-To enable AI exam generation, add `OPENAI_API_KEY` to the server environment
+To enable AI exam generation, add `GEMINI_API_KEY` to the server environment
 (never to source control or browser-side settings). Teachers and administrators
 can generate up to 50 MCQs from the exam's department, stream, subject, and
 topics; the existing manual question builder remains available without an AI

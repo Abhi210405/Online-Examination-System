@@ -167,9 +167,9 @@ def utcnow():
 
 
 def _generate_ai_questions(exam, question_count):
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("AI generation is unavailable until OPENAI_API_KEY is configured.")
+        raise RuntimeError("AI generation is unavailable until GEMINI_API_KEY is configured.")
 
     prompt = {
         "department": exam.department,
@@ -189,38 +189,68 @@ def _generate_ai_questions(exam, question_count):
             "Do not include explanations or markdown.",
         ],
     }
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "questions": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "question_text": {"type": "STRING"},
+                        "options": {"type": "ARRAY", "items": {"type": "STRING"}},
+                        "correct_index": {"type": "INTEGER"},
+                    },
+                    "required": ["question_text", "options", "correct_index"],
+                },
+            }
+        },
+        "required": ["questions"],
+    }
     request_data = json.dumps(
         {
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-            "temperature": 0.3,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You create high-quality educational multiple-choice assessment questions.",
-                },
-                {"role": "user", "content": json.dumps(prompt)},
-            ],
+            "systemInstruction": {
+                "parts": [
+                    {"text": "You create high-quality educational multiple-choice assessment questions."}
+                ]
+            },
+            "contents": [{"role": "user", "parts": [{"text": json.dumps(prompt)}]}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 8192,
+                "responseMimeType": "application/json",
+                "responseSchema": response_schema,
+            },
         }
     ).encode("utf-8")
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
     api_request = Request(
-        "https://api.openai.com/v1/chat/completions",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         data=request_data,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urlopen(api_request, timeout=45) as response:
             response_data = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
-        raise RuntimeError(f"OpenAI rejected the request (HTTP {error.code}). Check the API key and account access.") from error
+        if error.code == 429:
+            raise RuntimeError(
+                "Gemini rate limit or API quota reached. Check Google AI Studio quota/billing and try again."
+            ) from error
+        if error.code in {401, 403}:
+            raise RuntimeError(
+                "Gemini rejected the API key or its access. Check the key and Gemini API access in Google AI Studio."
+            ) from error
+        raise RuntimeError(f"Gemini rejected the request (HTTP {error.code}). Check the API key and model.") from error
     except (URLError, TimeoutError) as error:
-        raise RuntimeError("Could not connect to OpenAI. Please try again later.") from error
+        raise RuntimeError("Could not connect to Gemini. Please try again later.") from error
     except json.JSONDecodeError as error:
-        raise RuntimeError("OpenAI returned an invalid response. Please try again.") from error
+        raise RuntimeError("Gemini returned an invalid response. Please try again.") from error
 
     try:
-        content = response_data["choices"][0]["message"]["content"]
+        parts = response_data["candidates"][0]["content"]["parts"]
+        content = "".join(part["text"] for part in parts if isinstance(part.get("text"), str))
         result = json.loads(content)
         questions = result["questions"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
@@ -878,7 +908,7 @@ def manage_questions(exam_id):
         "questions.html",
         exam=exam,
         questions_locked=bool(exam.attempts),
-        ai_available=bool(os.environ.get("OPENAI_API_KEY")),
+        ai_available=bool(os.environ.get("GEMINI_API_KEY")),
     )
 
 

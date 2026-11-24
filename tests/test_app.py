@@ -1,5 +1,6 @@
 import os
 import json
+import io
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -468,7 +469,7 @@ def test_ai_question_generation_adds_validated_mcqs(client, monkeypatch):
         assert len(exam.questions[1].options) == 4
 
 
-def test_openai_question_generator_parses_chat_completion_json(monkeypatch):
+def test_gemini_question_generator_parses_generate_content_json(monkeypatch):
     question_data = {
         "questions": [
             {
@@ -488,11 +489,17 @@ def test_openai_question_generator_parses_chat_completion_json(monkeypatch):
 
         def read(self):
             return json.dumps(
-                {"choices": [{"message": {"content": json.dumps(question_data)}}]}
+                {"candidates": [{"content": {"parts": [{"text": json.dumps(question_data)}]}}]}
             ).encode("utf-8")
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
-    monkeypatch.setattr(application, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setenv("GEMINI_API_KEY", "test-api-key")
+    requests = []
+
+    def fake_urlopen(request, **_kwargs):
+        requests.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr(application, "urlopen", fake_urlopen)
     exam = SimpleNamespace(
         department="Computer Science",
         stream="B.Tech",
@@ -501,6 +508,26 @@ def test_openai_question_generator_parses_chat_completion_json(monkeypatch):
     )
 
     assert application._generate_ai_questions(exam, 1) == question_data["questions"]
+    assert requests[0].full_url.endswith("/models/gemini-3.6-flash:generateContent")
+    assert requests[0].get_header("X-goog-api-key") == "test-api-key"
+
+
+def test_gemini_quota_error_explains_http_429(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-api-key")
+
+    def fail_with_quota(*_args, **_kwargs):
+        raise application.HTTPError("https://example.test", 429, "quota", {}, io.BytesIO())
+
+    monkeypatch.setattr(application, "urlopen", fail_with_quota)
+    exam = SimpleNamespace(
+        department="Computer Science",
+        stream="B.Tech",
+        subject="Data structures",
+        topics="queues",
+    )
+
+    with pytest.raises(RuntimeError, match="Gemini rate limit or API quota"):
+        application._generate_ai_questions(exam, 1)
 
 
 def test_exam_visibility_is_limited_to_matching_student_department_and_stream(client):
