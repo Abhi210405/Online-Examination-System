@@ -24,7 +24,7 @@ from flask import (
     url_for,
 )
 from flask_migrate import Migrate, upgrade as run_migrations
-from sqlalchemy import event, func, or_, select
+from sqlalchemy import event, func, or_, select, update
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -34,6 +34,14 @@ from models import Answer, Attempt, Exam, Option, Question, User, db
 
 
 load_dotenv()
+
+PROCTORING_VIOLATION_LIMIT = 3
+PROCTORING_EVENT_TYPES = {
+    "tab_switch",
+    "fullscreen_exit",
+    "clipboard_attempt",
+    "face_missing",
+}
 
 
 def _is_production(environ=None):
@@ -427,11 +435,13 @@ def _save_answer(attempt, question_id, selected_option_id):
     answer.is_correct = False
 
 
-def _submit_attempt(attempt, final_answers=None):
+def _submit_attempt(attempt, final_answers=None, reason="manual"):
     if attempt.submitted_at is not None:
         return False
     now = utcnow()
-    if now < attempt.deadline_at and final_answers is not None:
+    if reason == "manual" and attempt.deadline_at is not None and now >= attempt.deadline_at:
+        reason = "time_expired"
+    if attempt.deadline_at is not None and now < attempt.deadline_at and final_answers is not None:
         for raw_question_id, raw_option_id in final_answers.items():
             try:
                 question_id = int(raw_question_id)
@@ -460,6 +470,7 @@ def _submit_attempt(attempt, final_answers=None):
 
     attempt.score = min(total, Decimal(attempt.exam.total_marks))
     attempt.submitted_at = now
+    attempt.submission_reason = reason
     db.session.commit()
     return True
 
@@ -1074,8 +1085,8 @@ def start_exam(exam_id):
         )
     )
     if attempt is not None:
-        if attempt.submitted_at is None and utcnow() >= attempt.deadline_at:
-            _submit_attempt(attempt)
+        if attempt.submitted_at is None and attempt.deadline_at and utcnow() >= attempt.deadline_at:
+            _submit_attempt(attempt, reason="time_expired")
             flash("Your examination time has ended and the saved answers were submitted.")
             return redirect(url_for("student_result", attempt_id=attempt.id))
         if attempt.submitted_at is not None:
@@ -1083,12 +1094,11 @@ def start_exam(exam_id):
             return redirect(url_for("student_result", attempt_id=attempt.id))
         return redirect(url_for("take_exam", attempt_id=attempt.id))
 
-    now = utcnow()
     attempt = Attempt(
         exam=exam,
         student=current_user(),
-        started_at=now,
-        deadline_at=now + timedelta(minutes=exam.duration_minutes),
+        started_at=None,
+        deadline_at=None,
     )
     db.session.add(attempt)
     try:
@@ -1106,18 +1116,83 @@ def start_exam(exam_id):
     return redirect(url_for("take_exam", attempt_id=attempt.id))
 
 
+@app.post("/api/attempts/<int:attempt_id>/begin")
+@roles_required("student")
+def begin_attempt(attempt_id):
+    attempt = _active_attempt(attempt_id)
+    if attempt.submitted_at is not None:
+        return jsonify(status="submitted", redirect=url_for("student_result", attempt_id=attempt.id)), 409
+    if attempt.deadline_at is not None and utcnow() >= attempt.deadline_at:
+        _submit_attempt(attempt, reason="time_expired")
+        return jsonify(status="submitted", redirect=url_for("student_result", attempt_id=attempt.id))
+    if attempt.started_at is None:
+        now = utcnow()
+        attempt.started_at = now
+        attempt.deadline_at = now + timedelta(minutes=attempt.exam.duration_minutes)
+        db.session.commit()
+    return jsonify(
+        status="started",
+        deadline=int(attempt.deadline_at.replace(tzinfo=timezone.utc).timestamp()),
+    )
+
+
 @app.get("/student/attempts/<int:attempt_id>")
 @roles_required("student")
 def take_exam(attempt_id):
     attempt = _active_attempt(attempt_id)
     if attempt.submitted_at is not None:
         return redirect(url_for("student_result", attempt_id=attempt.id))
-    if utcnow() >= attempt.deadline_at:
-        _submit_attempt(attempt)
+    if attempt.deadline_at is not None and utcnow() >= attempt.deadline_at:
+        _submit_attempt(attempt, reason="time_expired")
         flash("Time expired. Your saved answers have been submitted.")
         return redirect(url_for("student_result", attempt_id=attempt.id))
     saved = {answer.question_id: answer.selected_option_id for answer in attempt.answers}
     return render_template("take_exam.html", attempt=attempt, saved=saved)
+
+
+@app.post("/api/attempts/<int:attempt_id>/proctoring-violations")
+@roles_required("student")
+def record_proctoring_violation(attempt_id):
+    attempt = _active_attempt(attempt_id)
+    if attempt.submitted_at is not None:
+        return jsonify(
+            status="submitted",
+            redirect=url_for("student_result", attempt_id=attempt.id),
+        )
+    if attempt.started_at is None or attempt.deadline_at is None:
+        return jsonify(error="Complete the camera and fullscreen checks before starting."), 409
+    if utcnow() >= attempt.deadline_at:
+        _submit_attempt(attempt, reason="time_expired")
+        return jsonify(status="submitted", redirect=url_for("student_result", attempt_id=attempt.id))
+
+    payload = request.get_json(silent=False)
+    if not isinstance(payload, dict) or payload.get("event_type") not in PROCTORING_EVENT_TYPES:
+        abort(400, description="Provide a valid proctoring event type.")
+
+    result = db.session.execute(
+        update(Attempt)
+        .where(Attempt.id == attempt.id, Attempt.submitted_at.is_(None))
+        .values(proctoring_violations=Attempt.proctoring_violations + 1)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.session.rollback()
+        return jsonify(error="This examination has already been submitted."), 409
+    db.session.commit()
+    db.session.refresh(attempt)
+
+    if attempt.proctoring_violations >= PROCTORING_VIOLATION_LIMIT:
+        _submit_attempt(attempt, reason="proctoring")
+        return jsonify(
+            status="submitted",
+            violations=attempt.proctoring_violations,
+            redirect=url_for("student_result", attempt_id=attempt.id),
+        )
+    return jsonify(
+        status="recorded",
+        violations=attempt.proctoring_violations,
+        remaining=PROCTORING_VIOLATION_LIMIT - attempt.proctoring_violations,
+    )
 
 
 @app.post("/api/attempts/<int:attempt_id>/answers")
@@ -1126,8 +1201,10 @@ def autosave_answer(attempt_id):
     attempt = _active_attempt(attempt_id)
     if attempt.submitted_at is not None:
         return jsonify(error="This examination has already been submitted."), 409
+    if attempt.started_at is None or attempt.deadline_at is None:
+        return jsonify(error="Complete the camera and fullscreen checks before answering."), 409
     if utcnow() >= attempt.deadline_at:
-        _submit_attempt(attempt)
+        _submit_attempt(attempt, reason="time_expired")
         return jsonify(status="submitted", redirect=url_for("student_result", attempt_id=attempt.id))
     payload = request.get_json(silent=False)
     try:
@@ -1145,6 +1222,9 @@ def autosave_answer(attempt_id):
 @roles_required("student")
 def submit_exam(attempt_id):
     attempt = _active_attempt(attempt_id)
+    if attempt.started_at is None:
+        flash("Complete the camera and fullscreen checks before submitting.", "error")
+        return redirect(url_for("take_exam", attempt_id=attempt.id))
     final_answers = {
         key.removeprefix("q_"): value
         for key, value in request.form.items()
@@ -1229,7 +1309,9 @@ def add_security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; "
+        "default-src 'self'; style-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; "
+        "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; "
+        "worker-src 'self' blob:; img-src 'self' data: blob:; media-src 'self' blob:; "
         "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
     )
     if app.config["SESSION_COOKIE_SECURE"]:

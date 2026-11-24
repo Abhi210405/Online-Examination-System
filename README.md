@@ -2,8 +2,24 @@
 
 A Flask examination portal with separate administrator, teacher, and student
 workspaces. It supports account management, scheduled multiple-choice exams,
-timed attempts, autosaved answers, server-side scoring, and result history.
+timed attempts, autosaved answers, server-side scoring, result history, and
+browser-based exam proctoring.
 The existing features and database models are retained.
+
+## Exam proctoring
+
+Students must allow camera access and enter fullscreen before the exam timer
+starts. Face presence is checked locally in the browser; the camera stream is
+not recorded, uploaded, or stored, and this feature does not verify identity.
+MediaPipe Tasks Vision 1.2.3 and its face-detection model are loaded from their
+CDNs, so the browser needs internet access to initialize the check.
+
+Leaving the exam tab or fullscreen, attempting to copy/cut/paste, or losing
+face detection records a proctoring violation. The server submits the attempt
+automatically after three violations and marks that reason in the student and
+teacher results. These browser checks are deterrents, not tamper-proof controls;
+they cannot prevent OS-level shortcuts, screenshots, another device, or a
+student bypassing client-side checks.
 
 ## Requirements
 

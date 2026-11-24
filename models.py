@@ -100,10 +100,12 @@ class Attempt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_id = db.Column(db.Integer, db.ForeignKey("exams.id"), nullable=False)
     student_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    started_at = db.Column(db.DateTime, nullable=False)
-    deadline_at = db.Column(db.DateTime, nullable=False)
+    started_at = db.Column(db.DateTime)
+    deadline_at = db.Column(db.DateTime)
     submitted_at = db.Column(db.DateTime)
     score = db.Column(db.Numeric(8, 2), nullable=False, default=0)
+    proctoring_violations = db.Column(db.Integer, nullable=False, default=0)
+    submission_reason = db.Column(db.String(20), nullable=False, default="manual")
 
     exam = db.relationship("Exam", back_populates="attempts")
     student = db.relationship("User")
@@ -114,6 +116,7 @@ class Attempt(db.Model):
     __table_args__ = (
         UniqueConstraint("exam_id", "student_id", name="uq_exam_student"),
         CheckConstraint("score >= 0", name="ck_attempts_score"),
+        CheckConstraint("proctoring_violations >= 0", name="ck_attempts_proctoring_violations"),
     )
 
 

@@ -291,3 +291,62 @@ td strong{color:#303b55;font-size:11px}
 @media(max-width:950px){.hero{padding:48px 40px}.hero h1{font-size:54px}.floating-score{right:-15px}.content-grid,.admin-users-grid,.form-layout,.instructions-layout{grid-template-columns:1fr}.quick-panel{display:grid;grid-template-columns:repeat(3,1fr);gap:0 12px}.quick-panel>.eyebrow,.quick-panel>h2{grid-column:1/-1}.quick-link{align-items:flex-start}.question-layout{grid-template-columns:1fr}.question-list-panel{order:2}.exam-attempt-layout{grid-template-columns:minmax(0,1fr) 200px}}
 @media(max-width:700px){.topbar{height:64px;padding:0 18px}.nav-toggle{display:block}.topnav{display:none;position:absolute;top:63px;left:0;right:0;padding:14px 18px 18px;background:#fff;border-bottom:1px solid #e8ebf1;box-shadow:0 14px 20px #14203b0c;align-items:stretch;gap:13px}.topnav.is-open{display:flex;flex-direction:column}.nav-user{order:-1}.page-shell{padding:24px 17px 45px}.footer{padding:17px;gap:8px;font-size:9px}.hero{grid-template-columns:1fr;padding:37px 24px;min-height:auto}.hero h1{font-size:46px;letter-spacing:-2px}.hero-copy>p{font-size:13px}.hero-note{flex-wrap:wrap;font-size:9px}.hero-visual{min-height:245px;margin:4px 0 -12px}.exam-card{width:280px}.orbit{width:260px;height:260px}.orbit-two{width:320px;height:320px}.floating-score{right:1px;bottom:0}.welcome-row{align-items:flex-start;flex-direction:column;gap:8px;margin-top:37px}.welcome-row h2{font-size:23px}.feature-grid,.exam-card-grid{grid-template-columns:1fr}.feature-card{min-height:0}.feature-card p{min-height:0}.bottom-cta{align-items:flex-start;flex-direction:column;gap:15px;padding:22px}.bottom-cta h2{font-size:19px}.auth-layout{grid-template-columns:1fr}.auth-aside{padding:28px 25px 25px;min-height:205px}.auth-aside h1{font-size:31px;margin:13px 0 5px}.auth-aside>p{font-size:11px;margin:3px 0}.aside-stat{margin-top:14px}.auth-card{padding:29px 23px}.page-heading{align-items:flex-start;flex-direction:column}.page-heading h1,.student-welcome h1{font-size:22px}.page-heading>.button{align-self:flex-start}.stat-grid{grid-template-columns:repeat(2,1fr)}.stat-grid-three{grid-template-columns:repeat(2,1fr)}.stat-card-action{grid-column:1/-1}.quick-panel{display:block}.form-pair,.ai-generator-form{grid-template-columns:1fr}.student-welcome{padding:21px 18px}.welcome-avatar{width:39px;height:39px;flex:none}.student-summary{align-items:flex-start;gap:10px;flex-direction:column}.instructions-panel{padding:20px}.exam-facts{gap:7px}.exam-facts>div+div{padding-left:9px}.exam-facts strong{font-size:17px}.exam-facts span{font-size:7px;letter-spacing:.6px}.exam-topline{align-items:flex-start}.exam-topline h1{font-size:19px}.timer-card{min-width:115px;padding:8px}.timer-card>strong{font-size:19px}.exam-attempt-layout{grid-template-columns:1fr}.exam-sidebar{position:static;order:-1}.exam-sidebar>.panel{padding:12px}.question-nav-grid{grid-template-columns:repeat(8,1fr)}.safe-card{display:none}.exam-question{padding:17px}.exam-question h2{font-size:14px}.exam-submit-bar{align-items:flex-start;flex-direction:column}.exam-submit-bar>.button{width:100%}.score-card{gap:18px;padding:13px}.score-card>div>strong{font-size:19px}}
 @media(max-width:400px){.hero-actions{align-items:stretch;flex-direction:column}.hero-actions>.button{width:100%}.stat-grid-three{grid-template-columns:1fr 1fr}.exam-topline{flex-direction:column}.timer-card{align-self:flex-end}.question-nav-grid{grid-template-columns:repeat(6,1fr)}}
+.proctoring-gate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.8fr);
+  gap: 2rem;
+  align-items: center;
+  margin: 1.5rem 0;
+}
+
+.proctoring-gate[hidden],
+[data-exam-form][hidden] {
+  display: none !important;
+}
+
+.proctoring-copy h2 {
+  margin: 0.5rem 0;
+}
+
+.proctoring-copy p {
+  max-width: 42rem;
+}
+
+.proctoring-privacy,
+.proctoring-status {
+  font-size: 0.9rem;
+}
+
+.proctoring-status {
+  min-height: 1.5em;
+  font-weight: 600;
+}
+
+.proctoring-copy .table-action {
+  display: block;
+  margin-top: 1rem;
+}
+
+.proctoring-camera video {
+  display: block;
+  width: 100%;
+  max-height: 20rem;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #111827;
+  border-radius: 0.75rem;
+  transform: scaleX(-1);
+}
+
+.proctoring-camera span,
+.proctoring-result-note {
+  display: block;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 760px) {
+  .proctoring-gate {
+    grid-template-columns: 1fr;
+  }
+}

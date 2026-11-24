@@ -174,6 +174,14 @@ def csrf_for(client):
         return browser_session["_csrf_token"]
 
 
+def begin_attempt(client, attempt_id):
+    return client.post(
+        f"/api/attempts/{attempt_id}/begin",
+        json={},
+        headers={"X-CSRF-Token": csrf_for(client)},
+    )
+
+
 def login(client, email, password="correct-horse-battery"):
     client.get("/login")
     response = client.post(
@@ -573,7 +581,21 @@ def test_student_can_attempt_autosave_and_receive_server_calculated_result(clien
 
     page = client.get(started.location)
     assert page.status_code == 200
+    assert b"Camera preview stays on this device" in page.data
     assert b"is_correct" not in page.data
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.started_at is None
+        assert attempt.deadline_at is None
+
+    activated = begin_attempt(client, attempt_id)
+    assert activated.status_code == 200
+    assert activated.json["status"] == "started"
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.started_at is not None
+        assert attempt.deadline_at is not None
+
     token = csrf_for(client)
     saved = client.post(
         f"/api/attempts/{attempt_id}/answers",
@@ -649,6 +671,7 @@ def test_expired_attempt_auto_submits_saved_answers(client, monkeypatch):
         data={"csrf_token": csrf_for(client)},
     )
     attempt_id = int(started.location.rstrip("/").split("/")[-1])
+    assert begin_attempt(client, attempt_id).status_code == 200
     response = client.post(
         f"/api/attempts/{attempt_id}/answers",
         json={"question_id": question_id, "option_id": correct_option},
@@ -670,9 +693,89 @@ def test_expired_attempt_auto_submits_saved_answers(client, monkeypatch):
     with app.app_context():
         attempt = db.session.get(Attempt, attempt_id)
         assert attempt.submitted_at is not None
+        assert attempt.submission_reason == "time_expired"
         assert float(attempt.score) == 2
         assert len(attempt.answers) == 2
         assert any(answer.selected_option_id is None for answer in attempt.answers)
+
+
+def test_three_proctoring_violations_submit_attempt_and_record_reason(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    exam_id, question_id, correct_option, _second_question, _second_correct = create_exam(teacher_id)
+    create_user("Student", "student@example.test", "student")
+    login(client, "student@example.test")
+    started = client.post(
+        f"/student/exams/{exam_id}/start",
+        data={"csrf_token": csrf_for(client)},
+    )
+    attempt_id = int(started.location.rstrip("/").split("/")[-1])
+
+    pending_violation = client.post(
+        f"/api/attempts/{attempt_id}/proctoring-violations",
+        json={"event_type": "tab_switch"},
+        headers={"X-CSRF-Token": csrf_for(client)},
+    )
+    assert pending_violation.status_code == 409
+    assert begin_attempt(client, attempt_id).status_code == 200
+
+    saved = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={"question_id": question_id, "option_id": correct_option},
+        headers={"X-CSRF-Token": csrf_for(client)},
+    )
+    assert saved.status_code == 200
+    token = csrf_for(client)
+
+    for count, event_type in enumerate(
+        ["tab_switch", "fullscreen_exit", "clipboard_attempt"], start=1
+    ):
+        response = client.post(
+            f"/api/attempts/{attempt_id}/proctoring-violations",
+            json={"event_type": event_type},
+            headers={"X-CSRF-Token": token},
+        )
+        assert response.status_code == 200
+        assert response.json["violations"] == count
+        if count < 3:
+            assert response.json["status"] == "recorded"
+            assert response.json["remaining"] == 3 - count
+        else:
+            assert response.json["status"] == "submitted"
+            assert response.json["redirect"].endswith(f"/student/results/{attempt_id}")
+
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.submitted_at is not None
+        assert attempt.proctoring_violations == 3
+        assert attempt.submission_reason == "proctoring"
+        assert float(attempt.score) == 2
+        assert len(attempt.answers) == 2
+    result_page = client.get(response.json["redirect"])
+    assert result_page.status_code == 200
+    assert b"submitted automatically after three proctoring violations" in result_page.data
+
+
+def test_proctoring_violation_rejects_unknown_event_type(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    exam_id, _question_id, _correct_option, _second_question, _second_correct = create_exam(teacher_id)
+    create_user("Student", "student@example.test", "student")
+    login(client, "student@example.test")
+    started = client.post(
+        f"/student/exams/{exam_id}/start",
+        data={"csrf_token": csrf_for(client)},
+    )
+    attempt_id = int(started.location.rstrip("/").split("/")[-1])
+    assert begin_attempt(client, attempt_id).status_code == 200
+
+    response = client.post(
+        f"/api/attempts/{attempt_id}/proctoring-violations",
+        json={"event_type": "made_up_event"},
+        headers={"X-CSRF-Token": csrf_for(client)},
+    )
+    assert response.status_code == 400
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.proctoring_violations == 0
 
 
 def test_php_bcrypt_password_is_upgraded_after_successful_login(client):
