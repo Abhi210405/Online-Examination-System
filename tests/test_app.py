@@ -1,5 +1,8 @@
 import os
+import json
 from datetime import timedelta
+from decimal import Decimal
+from types import SimpleNamespace
 
 import bcrypt
 import pytest
@@ -158,6 +161,7 @@ def create_user(name, email, role, password="correct-horse-battery"):
             password_hash=application.generate_password_hash(password),
             roll_number="ST-100" if role == "student" else None,
             department="Computer Science" if role == "student" else None,
+            stream="B.Tech" if role == "student" else None,
         )
         db.session.add(user)
         db.session.commit()
@@ -348,6 +352,7 @@ def test_student_registration_and_role_dashboards(client):
             "password": "student-password",
             "roll_number": "CS-102",
             "department": "Computer Science",
+            "stream": "B.Tech",
         },
     )
     assert response.status_code == 302
@@ -367,6 +372,10 @@ def test_teacher_can_create_scheduled_exam_and_question_set(client):
             "csrf_token": csrf_for(client),
             "title": "Scheduled examination",
             "subject": "Computer Science",
+            "department": "Computer Science",
+            "stream": "B.Tech",
+            "topics": "algorithms, data structures",
+            "target_question_count": "10",
             "description": "Review each question.",
             "duration_minutes": "45",
             "total_marks": "2",
@@ -394,6 +403,9 @@ def test_teacher_can_create_scheduled_exam_and_question_set(client):
     with app.app_context():
         exam = db.session.get(Exam, exam_id)
         assert exam.created_by == teacher_id
+        assert exam.department == "Computer Science"
+        assert exam.stream == "B.Tech"
+        assert exam.target_question_count == 10
         assert exam.start_at.isoformat() == "2035-07-01T04:30:00"
         assert len(exam.questions) == 1
         assert exam.questions[0].options[1].is_correct
@@ -406,6 +418,116 @@ def test_teacher_can_create_scheduled_exam_and_question_set(client):
     with app.app_context():
         assert db.session.get(Question, question_id) is None
     assert client.get("/teacher/results").status_code == 200
+
+
+def test_ai_question_generation_adds_validated_mcqs(client, monkeypatch):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    login(client, "teacher@example.test")
+    response = client.post(
+        "/teacher/exams/new",
+        data={
+            "csrf_token": csrf_for(client),
+            "title": "AI algorithms test",
+            "subject": "Computer Science",
+            "department": "Computer Science",
+            "stream": "B.Tech",
+            "topics": "sorting, searching",
+            "target_question_count": "2",
+            "duration_minutes": "30",
+            "total_marks": "4",
+            "status": "published",
+        },
+    )
+    exam_id = int(response.location.split("/")[3])
+    ai_questions = [
+        {
+            "question_text": "Which algorithm sorts by repeatedly swapping adjacent items?",
+            "options": ["Bubble sort", "Binary search", "Merge sort", "Hashing"],
+            "correct_index": 0,
+        },
+        {
+            "question_text": "Which search requires sorted input?",
+            "options": ["Linear search", "Binary search", "Depth-first search", "Hash lookup"],
+            "correct_index": 1,
+        },
+    ]
+    monkeypatch.setattr(application, "_generate_ai_questions", lambda exam, count: ai_questions)
+    response = client.post(
+        f"/teacher/exams/{exam_id}/generate",
+        data={"csrf_token": csrf_for(client), "question_count": "2"},
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        exam = db.session.get(Exam, exam_id)
+        assert exam.created_by == teacher_id
+        assert len(exam.questions) == 2
+        assert exam.status == "draft"
+        assert exam.target_question_count == 2
+        assert sum((Decimal(question.marks) for question in exam.questions), Decimal("0")) == Decimal("4")
+        assert exam.questions[0].options[0].is_correct
+        assert len(exam.questions[1].options) == 4
+
+
+def test_openai_question_generator_parses_chat_completion_json(monkeypatch):
+    question_data = {
+        "questions": [
+            {
+                "question_text": "Which structure uses FIFO order?",
+                "options": ["Queue", "Stack", "Tree", "Graph"],
+                "correct_index": 0,
+            }
+        ]
+    }
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(question_data)}}]}
+            ).encode("utf-8")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(application, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    exam = SimpleNamespace(
+        department="Computer Science",
+        stream="B.Tech",
+        subject="Data structures",
+        topics="queues",
+    )
+
+    assert application._generate_ai_questions(exam, 1) == question_data["questions"]
+
+
+def test_exam_visibility_is_limited_to_matching_student_department_and_stream(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    matching_exam = create_exam(teacher_id, "Computer science exam")[0]
+    other_exam = create_exam(teacher_id, "Other department exam")[0]
+    other_stream_exam = create_exam(teacher_id, "Other stream exam")[0]
+    all_students_exam = create_exam(teacher_id, "All students exam")[0]
+    with app.app_context():
+        db.session.get(Exam, matching_exam).department = "Computer Science"
+        db.session.get(Exam, matching_exam).stream = "B.Tech"
+        db.session.get(Exam, other_exam).department = "Electrical Engineering"
+        db.session.get(Exam, other_exam).stream = "B.Tech"
+        db.session.get(Exam, other_stream_exam).department = "Computer Science"
+        db.session.get(Exam, other_stream_exam).stream = "B.Sc"
+        db.session.get(Exam, all_students_exam).department = "All departments"
+        db.session.get(Exam, all_students_exam).stream = "All streams"
+        db.session.commit()
+    create_user("Student", "student@example.test", "student")
+    login(client, "student@example.test")
+    response = client.get("/student")
+    assert b"Computer science exam" in response.data
+    assert b"Other department exam" not in response.data
+    assert b"Other stream exam" not in response.data
+    assert b"All students exam" in response.data
+    assert client.get(f"/student/exams/{other_exam}/instructions").status_code == 404
+    assert client.get(f"/student/exams/{other_stream_exam}/instructions").status_code == 404
 
 
 def test_student_can_attempt_autosave_and_receive_server_calculated_result(client):

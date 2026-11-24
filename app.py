@@ -1,9 +1,12 @@
+import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from functools import wraps
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import click
 from dotenv import load_dotenv
@@ -21,7 +24,7 @@ from flask import (
     url_for,
 )
 from flask_migrate import Migrate, upgrade as run_migrations
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, or_, select
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -161,6 +164,104 @@ def enable_sqlite_foreign_keys(connection, _record):
 
 def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _generate_ai_questions(exam, question_count):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("AI generation is unavailable until OPENAI_API_KEY is configured.")
+
+    prompt = {
+        "department": exam.department,
+        "stream": exam.stream,
+        "subject": exam.subject,
+        "topics": exam.topics,
+        "number_of_questions": question_count,
+        "question_format": {
+            "question_text": "string",
+            "options": ["exactly four answer strings"],
+            "correct_index": "integer from 0 to 3",
+        },
+        "requirements": [
+            "Create accurate, unambiguous multiple-choice questions suitable for the specified stream and department.",
+            "Distribute questions across the supplied topics.",
+            "Return only a JSON object with a questions array matching the exact requested count.",
+            "Do not include explanations or markdown.",
+        ],
+    }
+    request_data = json.dumps(
+        {
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You create high-quality educational multiple-choice assessment questions.",
+                },
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+        }
+    ).encode("utf-8")
+    api_request = Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=request_data,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(api_request, timeout=45) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        raise RuntimeError(f"OpenAI rejected the request (HTTP {error.code}). Check the API key and account access.") from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError("Could not connect to OpenAI. Please try again later.") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("OpenAI returned an invalid response. Please try again.") from error
+
+    try:
+        content = response_data["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        questions = result["questions"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("The AI response was not in the expected question format. Please try again.") from error
+
+    if not isinstance(questions, list) or len(questions) != question_count:
+        raise ValueError(f"The AI did not return exactly {question_count} questions. Please try again.")
+    for question in questions:
+        if not isinstance(question, dict):
+            raise ValueError("The AI returned an invalid question. Please try again.")
+        text = question.get("question_text")
+        options = question.get("options")
+        correct_index = question.get("correct_index")
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or len(text) > 5000
+            or not isinstance(options, list)
+            or len(options) != 4
+            or any(not isinstance(option, str) or not option.strip() or len(option) > 2000 for option in options)
+            or type(correct_index) is not int
+            or correct_index not in range(4)
+        ):
+            raise ValueError("The AI returned a question with invalid choices or answer data. Please try again.")
+    return questions
+
+
+def _student_can_access_exam(exam, student):
+    department_target = (exam.department or "").strip().casefold()
+    stream_target = (exam.stream or "").strip().casefold()
+    if department_target not in {"", "*", "all departments"} and (
+        not student.department or exam.department.strip().casefold() != student.department.strip().casefold()
+    ):
+        return False
+    if (
+        stream_target not in {"", "*", "all streams"}
+        and student.stream
+        and stream_target != student.stream.strip().casefold()
+    ):
+        return False
+    return True
 
 
 def current_user():
@@ -353,7 +454,8 @@ def register():
         password = request.form.get("password", "")
         roll_number = request.form.get("roll_number", "").strip()
         department = request.form.get("department", "").strip()
-        if not name or "@" not in email or len(password) < 8 or not roll_number or not department:
+        stream = request.form.get("stream", "").strip()
+        if not name or "@" not in email or len(password) < 8 or not roll_number or not department or not stream:
             flash("Enter all required details and use a password of at least 8 characters.", "error")
         else:
             db.session.add(
@@ -364,6 +466,7 @@ def register():
                     role="student",
                     roll_number=roll_number,
                     department=department,
+                    stream=stream,
                 )
             )
             try:
@@ -617,6 +720,7 @@ def create_exam():
         try:
             duration = int(request.form.get("duration_minutes", ""))
             total_marks = Decimal(request.form.get("total_marks", ""))
+            target_question_count = int(request.form.get("target_question_count", ""))
             start_at = _parse_datetime(
                 request.form.get("start_at") or request.form.get("start_at_local", "")
             )
@@ -628,9 +732,19 @@ def create_exam():
         else:
             title = request.form.get("title", "").strip()
             subject = request.form.get("subject", "").strip()
+            department = request.form.get("department", "").strip()
+            stream = request.form.get("stream", "").strip()
+            topics = request.form.get("topics", "").strip()
             if (
                 not title
                 or not subject
+                or not department
+                or not stream
+                or not topics
+                or len(department) > 120
+                or len(stream) > 120
+                or len(topics) > 2000
+                or not 1 <= target_question_count <= 50
                 or not 1 <= duration <= 10080
                 or not total_marks.is_finite()
                 or not Decimal("0") < total_marks <= Decimal("999999.99")
@@ -641,6 +755,10 @@ def create_exam():
                 exam = Exam(
                     title=title,
                     subject=subject,
+                    department=department,
+                    stream=stream,
+                    topics=topics,
+                    target_question_count=target_question_count,
                     description=request.form.get("description", "").strip(),
                     duration_minutes=duration,
                     total_marks=total_marks,
@@ -669,6 +787,7 @@ def edit_exam(exam_id):
         try:
             duration = int(request.form.get("duration_minutes", ""))
             total_marks = Decimal(request.form.get("total_marks", ""))
+            target_question_count = int(request.form.get("target_question_count", ""))
             start_at = _parse_datetime(
                 request.form.get("start_at") or request.form.get("start_at_local", "")
             )
@@ -680,10 +799,20 @@ def edit_exam(exam_id):
         else:
             title = request.form.get("title", "").strip()
             subject = request.form.get("subject", "").strip()
+            department = request.form.get("department", "").strip()
+            stream = request.form.get("stream", "").strip()
+            topics = request.form.get("topics", "").strip()
             status = request.form.get("status", "")
             if (
                 not title
                 or not subject
+                or not department
+                or not stream
+                or not topics
+                or len(department) > 120
+                or len(stream) > 120
+                or len(topics) > 2000
+                or not 1 <= target_question_count <= 50
                 or not 1 <= duration <= 10080
                 or not total_marks.is_finite()
                 or not Decimal("0") < total_marks <= Decimal("999999.99")
@@ -694,6 +823,10 @@ def edit_exam(exam_id):
             else:
                 exam.title = title
                 exam.subject = subject
+                exam.department = department
+                exam.stream = stream
+                exam.topics = topics
+                exam.target_question_count = target_question_count
                 exam.description = request.form.get("description", "").strip()
                 exam.duration_minutes = duration
                 exam.total_marks = total_marks
@@ -741,7 +874,76 @@ def manage_questions(exam_id):
                 db.session.commit()
                 flash("Question added.")
                 return redirect(url_for("manage_questions", exam_id=exam.id))
-    return render_template("questions.html", exam=exam, questions_locked=bool(exam.attempts))
+    return render_template(
+        "questions.html",
+        exam=exam,
+        questions_locked=bool(exam.attempts),
+        ai_available=bool(os.environ.get("OPENAI_API_KEY")),
+    )
+
+
+@app.post("/teacher/exams/<int:exam_id>/generate")
+@roles_required("teacher", "admin")
+def generate_exam_questions(exam_id):
+    exam = _exam_access(exam_id)
+    if exam.attempts:
+        flash("Questions are locked because a student has already started this examination.", "error")
+        return redirect(url_for("manage_questions", exam_id=exam.id))
+    try:
+        question_count = int(request.form.get("question_count", str(exam.target_question_count or 0)))
+    except ValueError:
+        flash("Enter a valid number of questions.", "error")
+        return redirect(url_for("manage_questions", exam_id=exam.id))
+    if not 1 <= question_count <= 50:
+        flash("Choose between 1 and 50 questions.", "error")
+        return redirect(url_for("manage_questions", exam_id=exam.id))
+    question_count -= len(exam.questions)
+    if question_count <= 0:
+        flash("This exam already has the requested number of questions.", "error")
+        return redirect(url_for("manage_questions", exam_id=exam.id))
+
+    try:
+        generated_questions = _generate_ai_questions(exam, question_count)
+    except (RuntimeError, ValueError) as error:
+        app.logger.warning("AI question generation failed: %s", error)
+        flash(str(error), "error")
+        return redirect(url_for("manage_questions", exam_id=exam.id))
+
+    existing_marks = sum((Decimal(question.marks) for question in exam.questions), Decimal("0"))
+    remaining_marks = max(exam.total_marks - existing_marks, Decimal("0"))
+    marks_per_question = (remaining_marks / question_count).quantize(
+        Decimal("0.01"), rounding=ROUND_DOWN
+    )
+    if marks_per_question <= 0:
+        marks_per_question = Decimal("1")
+    total_question_count = len(exam.questions) + len(generated_questions)
+    questions = []
+    for index, generated in enumerate(generated_questions):
+        marks = (
+            remaining_marks - marks_per_question * (question_count - 1)
+            if index == question_count - 1
+            else marks_per_question
+        )
+        if marks <= 0:
+            marks = marks_per_question
+        question = Question(
+            exam=exam,
+            question_text=generated["question_text"].strip(),
+            marks=marks,
+        )
+        question.options = [
+            Option(option_text=text.strip(), is_correct=option_index == generated["correct_index"])
+            for option_index, text in enumerate(generated["options"])
+        ]
+        questions.append(question)
+    db.session.add_all(questions)
+    exam.target_question_count = total_question_count
+    exam.status = "draft"
+    db.session.commit()
+    flash(
+        f"AI generated and added {len(questions)} questions. The exam is now a draft; review it before publishing."
+    )
+    return redirect(url_for("manage_questions", exam_id=exam.id))
 
 
 @app.post("/teacher/questions/<int:question_id>/delete")
@@ -771,9 +973,33 @@ def teacher_results():
 @app.get("/student")
 @roles_required("student")
 def student_dashboard():
-    exams = db.session.scalars(
-        select(Exam).where(Exam.status == "published").order_by(Exam.created_at.desc())
-    ).all()
+    student = current_user()
+    exam_query = select(Exam).where(Exam.status == "published")
+    if student.department:
+        exam_query = exam_query.where(
+            or_(
+                Exam.department.is_(None),
+                func.lower(Exam.department).in_(["*", "all departments"]),
+                func.lower(Exam.department) == student.department.strip().lower(),
+            )
+        )
+    else:
+        exam_query = exam_query.where(
+            or_(Exam.department.is_(None), func.lower(Exam.department).in_(["*", "all departments"]))
+        )
+    if student.stream:
+        exam_query = exam_query.where(
+            or_(
+                Exam.stream.is_(None),
+                func.lower(Exam.stream).in_(["*", "all streams"]),
+                func.lower(Exam.stream) == student.stream.strip().lower(),
+            )
+        )
+    else:
+        exam_query = exam_query.where(
+            or_(Exam.stream.is_(None), func.lower(Exam.stream).in_(["*", "all streams"]))
+        )
+    exams = db.session.scalars(exam_query.order_by(Exam.created_at.desc())).all()
     attempts = {
         attempt.exam_id: attempt
         for attempt in db.session.scalars(
@@ -788,7 +1014,7 @@ def student_dashboard():
 @roles_required("student")
 def exam_instructions(exam_id):
     exam = db.get_or_404(Exam, exam_id)
-    if exam.status != "published":
+    if exam.status != "published" or not _student_can_access_exam(exam, current_user()):
         abort(404)
     attempt = db.session.scalar(
         select(Attempt).where(
@@ -803,6 +1029,8 @@ def exam_instructions(exam_id):
 @roles_required("student")
 def start_exam(exam_id):
     exam = db.get_or_404(Exam, exam_id)
+    if not _student_can_access_exam(exam, current_user()):
+        abort(404)
     if not _exam_open(exam):
         flash("This examination is not currently open.", "error")
         return redirect(url_for("student_dashboard"))

@@ -31,6 +31,7 @@
       {% endif %}
       {% if is_register %}
         <div class="form-pair"><label>Roll number<input name="roll_number" maxlength="50" required></label><label>Department<input name="department" maxlength="100" placeholder="e.g. Computer Science" required></label></div>
+        <label>Stream / program<input name="stream" maxlength="120" placeholder="e.g. B.Tech" required></label>
       {% endif %}
       {% if not is_register and not is_setup %}
         <label>Email address<input name="email" type="email" autocomplete="username" required autofocus></label>

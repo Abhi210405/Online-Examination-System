@@ -21,6 +21,7 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=False, default="student")
     roll_number = db.Column(db.String(50))
     department = db.Column(db.String(100))
+    stream = db.Column(db.String(120))
     status = db.Column(db.String(20), nullable=False, default="active")
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
@@ -38,6 +39,10 @@ class Exam(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(180), nullable=False)
     subject = db.Column(db.String(120), nullable=False)
+    department = db.Column(db.String(120))
+    stream = db.Column(db.String(120))
+    topics = db.Column(db.Text)
+    target_question_count = db.Column(db.Integer)
     description = db.Column(db.Text)
     duration_minutes = db.Column(db.Integer, nullable=False)
     total_marks = db.Column(db.Numeric(8, 2), nullable=False)

@@ -51,7 +51,7 @@ up and confirm that its tables/columns match the checked-in initial migration
 before marking it as migrated:
 
 ```powershell
-flask --app app db stamp head
+flask --app app db stamp eca7f2e56ee3
 flask --app app db upgrade
 ```
 
@@ -86,6 +86,8 @@ and any Preview environments you intend to use:
 | `APP_ENV` | `production` |
 | `SECRET_KEY` | A private random value of at least 32 characters |
 | `DATABASE_URL` | PostgreSQL connection URL from your database provider |
+| `OPENAI_API_KEY` | Optional OpenAI API key to enable AI-generated exam questions |
+| `OPENAI_MODEL` | Optional OpenAI chat-completions model; defaults to `gpt-4o-mini` |
 | `TRUSTED_HOSTS` | Optional comma-separated hosts for custom domains; defaults to `.vercel.app` (Werkzeug suffix syntax) |
 
 `SECRET_KEY` and `DATABASE_URL` are required for every Vercel deployment
@@ -116,6 +118,14 @@ fails closed if the secret or database URL is missing, if the key is too short,
 or if SQLite is selected. Vercel preview deployments also require PostgreSQL;
 use an isolated preview database if you need preview data separation.
 
+To enable AI exam generation, add `OPENAI_API_KEY` to the server environment
+(never to source control or browser-side settings). Teachers and administrators
+can generate up to 50 MCQs from the exam's department, stream, subject, and
+topics; the existing manual question builder remains available without an AI
+key. Exam targeting fields and student stream support are added by the latest
+database migration, so apply migrations with `flask db upgrade` before using
+the new exam form.
+
 ### 2. Apply migrations and create the first administrator
 
 Run these commands from a trusted local machine or CI job that has network
@@ -133,10 +143,17 @@ per release, before directing traffic to a schema that depends on them; do not
 run schema changes from each serverless request.
 
 For an existing, schema-compatible production database that predates Alembic,
-take a verified backup and use `flask --app app db stamp head` instead of
-`db upgrade` for the initial baseline, then use `db upgrade` for later
-migrations. Confirm the schema matches the baseline first; stamping does not
-change or validate table structure.
+take a verified backup and stamp the checked-in initial schema revision before
+applying later migrations:
+
+```powershell
+flask --app app db stamp eca7f2e56ee3
+flask --app app db upgrade
+```
+
+Confirm the schema matches that initial revision first; stamping does not
+change or validate table structure. Do not stamp an empty or incompatible
+database.
 
 ### 3. Connect and deploy
 
