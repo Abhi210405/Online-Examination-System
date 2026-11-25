@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Academic catalogs{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ADMINISTRATION / CATALOGS</span><h1>Subjects & departments</h1><p>Manage the academic values used for exam targeting and student profiles.</p></div><a class="button button-outline" href="{{ url_for('admin_dashboard') }}">← Dashboard</a></section>
+<section class="content-grid admin-users-grid">
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">NEW CATALOG ENTRY</span><h2>Add an entry</h2></div></div><form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Type<select name="kind" required><option value="subject">Subject</option><option value="department">Department</option><option value="stream">Stream / program</option></select></label><label>Name<input name="name" maxlength="120" required></label><button class="button button-primary" type="submit">Add to catalog</button></form></article>
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">ACADEMIC VALUES</span><h2>Catalog entries <span class="count-tag">{{ entries|length }}</span></h2></div></div>
+    {% if entries %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Type</th><th>Name</th><th>Status</th><th></th></tr></thead><tbody>{% for entry in entries %}<tr><td>{{ entry.kind|title }}</td><td><strong>{{ entry.name }}</strong></td><td><span class="pill pill-{{ 'active' if entry.active else 'inactive' }}">{{ "Active" if entry.active else "Inactive" }}</span></td><td><form method="post" action="{{ url_for('toggle_catalog_entry', entry_id=entry.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="table-action" type="submit">{{ "Deactivate" if entry.active else "Activate" }}</button></form></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-state"><strong>No catalog entries</strong><p>Add subjects, departments, or streams to provide consistent choices across the portal.</p></div>{% endif %}
+  </article>
+</section>
+{% endblock %}

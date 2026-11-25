@@ -16,7 +16,7 @@ os.environ["SECRET_KEY"] = "test-only-secret-key"
 
 import app as application
 from app import app, db
-from models import Attempt, Exam, Option, Question, User
+from models import Answer, Attempt, Exam, Option, Question, QuestionBankItem, User
 
 
 def test_local_database_configuration_defaults_to_instance_sqlite(tmp_path):
@@ -830,6 +830,259 @@ def test_admin_and_student_result_pages_render(client):
         assert db.session.get(User, admin_id).role == "admin"
         assert db.session.get(User, student_id).role == "student"
         assert db.session.get(Exam, exam_id).created_by == teacher_id
+
+
+def test_new_role_dashboard_pages_render_with_existing_data(client):
+    create_user("Admin", "admin@example.test", "admin")
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    create_user("Student", "student@example.test", "student")
+    exam_id, *_ = create_exam(teacher_id)
+
+    login(client, "admin@example.test")
+    for path in (
+        "/admin",
+        "/admin/users",
+        "/admin/catalog",
+        "/admin/settings",
+        "/admin/activity",
+        "/admin/monitoring",
+        "/teacher",
+        "/teacher/results",
+        "/teacher/question-bank",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200, path
+    client.post("/logout", data={"csrf_token": csrf_for(client)})
+    login(client, "teacher@example.test")
+    assert client.get(f"/teacher/exams/{exam_id}/questions").status_code == 200
+
+    client.post("/logout", data={"csrf_token": csrf_for(client)})
+    login(client, "student@example.test")
+    for path in ("/student", "/student/results", "/profile", "/notifications"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+
+
+def test_student_profile_cannot_change_assigned_exam_audience(client):
+    student_id = create_user("Student", "student@example.test", "student")
+    login(client, "student@example.test")
+    response = client.post(
+        "/profile",
+        data={
+            "csrf_token": csrf_for(client),
+            "name": "Updated Student",
+            "roll_number": "ST-200",
+            "department": "Electrical Engineering",
+            "stream": "B.Sc",
+        },
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        student = db.session.get(User, student_id)
+        assert student.name == "Updated Student"
+        assert student.roll_number == "ST-200"
+        assert student.department == "Computer Science"
+        assert student.stream == "B.Tech"
+
+
+def test_written_answer_autosave_review_negative_marks_and_teacher_grading(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    create_user("Student", "student@example.test", "student")
+    with app.app_context():
+        exam = Exam(
+            title="Mixed assessment",
+            subject="Computer Science",
+            duration_minutes=30,
+            total_marks=6,
+            negative_marks_per_wrong=Decimal("0.5"),
+            created_by=teacher_id,
+            status="published",
+        )
+        correct_mcq = Question(question_text="Correct answer", marks=2)
+        correct_mcq.options = [
+            Option(option_text="Right", is_correct=True),
+            Option(option_text="Wrong", is_correct=False),
+            Option(option_text="Other", is_correct=False),
+            Option(option_text="None", is_correct=False),
+        ]
+        wrong_mcq = Question(question_text="Wrong answer", marks=2)
+        wrong_mcq.options = [
+            Option(option_text="Right", is_correct=True),
+            Option(option_text="Wrong", is_correct=False),
+            Option(option_text="Other", is_correct=False),
+            Option(option_text="None", is_correct=False),
+        ]
+        written = Question(
+            question_text="Explain your approach.",
+            question_type="subjective",
+            marks=2,
+        )
+        exam.questions = [correct_mcq, wrong_mcq, written]
+        db.session.add(exam)
+        db.session.commit()
+        exam_id = exam.id
+        correct_question_id = correct_mcq.id
+        correct_option_id = correct_mcq.options[0].id
+        wrong_question_id = wrong_mcq.id
+        wrong_option_id = wrong_mcq.options[1].id
+        written_question_id = written.id
+
+    login(client, "student@example.test")
+    started = client.post(
+        f"/student/exams/{exam_id}/start",
+        data={"csrf_token": csrf_for(client)},
+    )
+    attempt_id = int(started.location.rstrip("/").split("/")[-1])
+    assert begin_attempt(client, attempt_id).status_code == 200
+    response = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={
+            "question_id": written_question_id,
+            "response_text": "A reasoned response.",
+            "is_marked_for_review": True,
+        },
+        headers={"X-CSRF-Token": csrf_for(client)},
+    )
+    assert response.status_code == 200
+    submitted = client.post(
+        f"/student/attempts/{attempt_id}/submit",
+        data={
+            "csrf_token": csrf_for(client),
+            f"q_{correct_question_id}": str(correct_option_id),
+            f"q_{wrong_question_id}": str(wrong_option_id),
+            f"q_{written_question_id}": "A reasoned response.",
+        },
+    )
+    assert submitted.status_code == 302
+    result_page = client.get(submitted.location)
+    assert b"awaiting teacher evaluation" in result_page.data
+    pdf = client.get(f"/student/results/{attempt_id}/pdf")
+    assert pdf.status_code == 200
+    assert pdf.mimetype == "application/pdf"
+
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.score == Decimal("1.50")
+        written_answer = db.session.scalar(
+            select(Answer).where(
+                Answer.attempt_id == attempt_id,
+                Answer.question_id == written_question_id,
+            )
+        )
+        assert written_answer.is_marked_for_review
+        assert application._pending_evaluation_count(attempt) == 1
+        written_answer_id = written_answer.id
+
+    teacher_client = app.test_client()
+    login(teacher_client, "teacher@example.test")
+    assert teacher_client.get(f"/teacher/attempts/{attempt_id}").status_code == 200
+    graded = teacher_client.post(
+        f"/teacher/attempts/{attempt_id}",
+        data={
+            "csrf_token": csrf_for(teacher_client),
+            f"score_{written_answer_id}": "1.5",
+            f"feedback_{written_answer_id}": "Clear explanation.",
+        },
+    )
+    assert graded.status_code == 302
+    with app.app_context():
+        attempt = db.session.get(Attempt, attempt_id)
+        assert attempt.score == Decimal("3.00")
+        assert application._pending_evaluation_count(attempt) == 0
+    assert b"3.00" in client.get(f"/student/results/{attempt_id}").data
+    assert teacher_client.get("/teacher/results.csv").mimetype == "text/csv"
+    assert teacher_client.get("/teacher/results.pdf").mimetype == "application/pdf"
+
+
+def test_duplicate_exams_are_rejected_and_status_changes_are_enforced(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    login(client, "teacher@example.test")
+    exam_form = {
+        "csrf_token": csrf_for(client),
+        "title": "Duplicate prevention",
+        "subject": "Computer Science",
+        "department": "Computer Science",
+        "stream": "B.Tech",
+        "topics": "algorithms",
+        "target_question_count": "1",
+        "duration_minutes": "30",
+        "total_marks": "1",
+        "status": "published",
+    }
+    created = client.post("/teacher/exams/new", data=exam_form)
+    assert created.status_code == 302
+    duplicate = client.post(
+        "/teacher/exams/new",
+        data={**exam_form, "csrf_token": csrf_for(client)},
+    )
+    assert duplicate.status_code == 200
+    exam_id = int(created.location.split("/")[3])
+    with app.app_context():
+        assert db.session.scalar(select(func.count(Exam.id))) == 1
+        exam = db.session.get(Exam, exam_id)
+        assert exam.created_by == teacher_id
+        assert exam.status == "draft"
+
+    published_without_questions = client.post(
+        f"/teacher/exams/{exam_id}/status",
+        data={
+            "csrf_token": csrf_for(client),
+            "status": "published",
+        },
+    )
+    assert published_without_questions.status_code == 302
+    with app.app_context():
+        assert db.session.get(Exam, exam_id).status == "draft"
+    with app.app_context():
+        exam = db.session.get(Exam, exam_id)
+        question = Question(question_text="One question", marks=1)
+        question.options = [
+            Option(option_text=value, is_correct=index == 0)
+            for index, value in enumerate(("A", "B", "C", "D"))
+        ]
+        exam.questions.append(question)
+        db.session.commit()
+    published = client.post(
+        f"/teacher/exams/{exam_id}/status",
+        data={"csrf_token": csrf_for(client), "status": "published"},
+    )
+    assert published.status_code == 302
+    with app.app_context():
+        assert db.session.get(Exam, exam_id).status == "published"
+
+
+def test_question_bank_csv_import_and_copy_enforce_owner(client):
+    teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
+    exam_id, *_ = create_exam(teacher_id, "Reusable questions exam")
+    login(client, "teacher@example.test")
+    csv_content = (
+        "question_text,marks,type,subject,option_a,option_b,option_c,option_d,correct_option\n"
+        '"Which data structure is FIFO?",2,mcq,Computer Science,Queue,Stack,Tree,Graph,A\n'
+    ).encode()
+    response = client.post(
+        "/teacher/question-bank/import",
+        data={
+            "csrf_token": csrf_for(client),
+            "question_file": (io.BytesIO(csv_content), "questions.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        item = db.session.scalar(select(QuestionBankItem))
+        item_id = item.id
+        assert item.owner_id == teacher_id
+        assert item.correct_index == 0
+
+    copied = client.post(
+        f"/teacher/question-bank/{item_id}/copy",
+        data={"csrf_token": csrf_for(client), "exam_id": str(exam_id)},
+    )
+    assert copied.status_code == 302
+    with app.app_context():
+        exam = db.session.get(Exam, exam_id)
+        assert len(exam.questions) == 3
+        assert exam.questions[-1].options[0].is_correct
 
 
 def test_mysql_importer_copies_existing_schema_without_source_changes(tmp_path, monkeypatch):

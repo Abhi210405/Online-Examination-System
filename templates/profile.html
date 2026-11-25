@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Your profile{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ACCOUNT</span><h1>Your profile</h1><p>Keep your account details current and manage your password.</p></div><a class="button button-outline" href="{{ url_for('dashboard') }}">← Dashboard</a></section>
+<section class="content-grid profile-grid">
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">PROFILE DETAILS</span><h2>Personal information</h2></div></div>
+    <form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Full name<input name="name" maxlength="120" value="{{ current_user().name }}" required></label>
+      <label>Email address<input type="email" value="{{ current_user().email }}" disabled><span class="label-hint">Contact an administrator to change your email.</span></label>
+      {% if current_user().role == "student" %}
+        <label>Roll number<input name="roll_number" maxlength="50" value="{{ current_user().roll_number or '' }}" required></label>
+        <label>Department<input value="{{ current_user().department or 'Not assigned' }}" disabled><span class="label-hint">Exam access is based on your institution-assigned department.</span></label>
+        <label>Stream / program<input value="{{ current_user().stream or 'Not assigned' }}" disabled><span class="label-hint">Exam access is based on your institution-assigned program.</span></label>
+      {% endif %}
+      <button class="button button-primary" type="submit">Save profile</button>
+    </form>
+  </article>
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">SECURITY</span><h2>Change password</h2></div></div>
+    <form method="post" action="{{ url_for('change_password') }}" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Current password<input name="current_password" type="password" autocomplete="current-password" required></label>
+      <label>New password <span class="label-hint">At least 8 characters</span><input name="new_password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <label>Confirm new password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <button class="button button-primary" type="submit">Update password</button>
+    </form>
+  </article>
+</section>
+{% endblock %}

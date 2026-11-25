@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Review attempt · {{ attempt.student.name }}{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">TEACHING WORKSPACE / EVALUATION</span><h1>{{ attempt.student.name }}</h1><p>{{ attempt.exam.title }} · {{ attempt.exam.subject }} · Submitted <time data-local-time="{{ attempt.submitted_at.isoformat() }}">{{ attempt.submitted_at.strftime('%b %d, %Y · %H:%M') }} UTC</time></p></div><a class="button button-outline" href="{{ url_for('teacher_results') }}">← Results</a></section>
+<section class="panel">
+  <div class="panel-heading"><div><span class="eyebrow eyebrow-dark">CURRENT RESULT</span><h2>{{ attempt.score }} / {{ attempt.exam.total_marks }} <span class="count-tag">{{ pending_count }} pending</span></h2></div></div>
+  <div class="performance-review"><span class="eyebrow eyebrow-dark">MULTIPLE-CHOICE REVIEW</span>
+    {% set mcq_answers = attempt.answers|selectattr('question.question_type', 'equalto', 'mcq')|list %}
+    {% if mcq_answers %}<ol class="performance-answer-list">{% for answer in mcq_answers %}{% set correct_option = answer.question.options|selectattr('is_correct')|first %}<li><div class="performance-answer-heading"><strong>Question {{ loop.index }}</strong><span class="pill {{ 'pill-active' if answer.is_correct else 'pill-inactive' }}">{{ "Correct" if answer.is_correct else "Incorrect" }}</span></div><p>{{ answer.question.question_text }}</p><small>Student answer: {{ answer.selected_option.option_text if answer.selected_option else "Not answered" }}</small><small>Correct answer: {{ correct_option.option_text if correct_option else "Not configured" }}</small><small>{{ answer.question.marks }} point{{ "s" if answer.question.marks != 1 else "" }}</small></li>{% endfor %}</ol>{% else %}<div class="empty-state"><strong>No multiple-choice questions</strong></div>{% endif %}
+  </div>
+  <form method="post" class="stack-form evaluation-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for answer in attempt.answers if answer.question.question_type == "subjective" and answer.response_text %}
+      <article class="evaluation-answer"><div class="question-list-index">{{ "%02d"|format(loop.index) }}</div><div><h3>{{ answer.question.question_text }}</h3><span class="label-hint">Maximum {{ answer.question.marks }} point{{ "s" if answer.question.marks != 1 else "" }}</span><div class="written-response">{{ answer.response_text }}</div><label>Score<input type="number" name="score_{{ answer.id }}" min="0" max="{{ answer.question.marks }}" step="0.01" value="{{ answer.manual_score if answer.manual_score is not none else '' }}" {% if answer.manual_score is none %}required{% endif %}></label><label>Feedback<textarea name="feedback_{{ answer.id }}" rows="3" maxlength="5000">{{ answer.feedback or '' }}</textarea></label>{% if answer.graded_by %}<small class="muted-text">Last graded by {{ answer.graded_by.name }}</small>{% endif %}</div></article>
+    {% else %}<div class="empty-state"><strong>No written responses to evaluate</strong><p>MCQ answers are graded automatically.</p></div>{% endfor %}
+    {% if attempt.answers|selectattr('question.question_type', 'equalto', 'subjective')|selectattr('response_text')|list %}<button class="button button-primary" type="submit">Save written-answer grades</button>{% endif %}
+  </form>
+</section>
+{% endblock %}

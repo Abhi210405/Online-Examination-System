@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ACCOUNT / UPDATES</span><h1>Notifications</h1><p>{{ unread_count }} unread update{{ "s" if unread_count != 1 else "" }}.</p></div>{% if unread_count %}<form method="post" action="{{ url_for('mark_notifications_read') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button button-outline" type="submit">Mark all as read</button></form>{% endif %}</section>
+<section class="panel">
+  {% if notifications %}<ul class="notification-list">{% for item in notifications %}<li class="{{ 'is-unread' if not item.read_at else '' }}"><div><span class="notification-indicator" aria-hidden="true"></span><div><h2>{{ item.title }}</h2><p>{{ item.body }}</p><time data-local-time="{{ item.created_at.isoformat() }}">{{ item.created_at.strftime('%b %d, %Y · %H:%M') }} UTC</time></div></div>
+    {% if not item.read_at or item.link %}<form method="post" action="{{ url_for('mark_notification_read', notification_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="table-action" type="submit">{{ "Open" if item.link else "Mark as read" }} →</button></form>{% endif %}
+  </li>{% endfor %}</ul>{% else %}<div class="empty-state"><strong>No notifications yet</strong><p>Important exam and result updates will appear here.</p></div>{% endif %}
+</section>
+{% endblock %}

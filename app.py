@@ -1,5 +1,9 @@
+import csv
+import hashlib
+import io
 import json
 import os
+import random
 import secrets
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
@@ -16,6 +20,7 @@ from flask import (
     flash,
     g,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -30,7 +35,20 @@ from sqlalchemy.exc import ArgumentError, IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 import bcrypt
 
-from models import Answer, Attempt, Exam, Option, Question, User, db
+from models import (
+    ActivityLog,
+    Answer,
+    Attempt,
+    CatalogEntry,
+    Exam,
+    Notification,
+    Option,
+    Question,
+    QuestionBankItem,
+    SystemSetting,
+    User,
+    db,
+)
 
 
 load_dotenv()
@@ -295,11 +313,48 @@ def _student_can_access_exam(exam, student):
         return False
     if (
         stream_target not in {"", "*", "all streams"}
-        and student.stream
-        and stream_target != student.stream.strip().casefold()
+        and (
+            not student.stream
+            or stream_target != student.stream.strip().casefold()
+        )
     ):
         return False
     return True
+
+
+def _student_exam_query(student):
+    query = select(Exam).where(Exam.status == "published", Exam.questions.any())
+    if student.department:
+        query = query.where(
+            or_(
+                Exam.department.is_(None),
+                func.lower(Exam.department).in_(["*", "all departments"]),
+                func.lower(Exam.department) == student.department.strip().lower(),
+            )
+        )
+    else:
+        query = query.where(
+            or_(
+                Exam.department.is_(None),
+                func.lower(Exam.department).in_(["*", "all departments"]),
+            )
+        )
+    if student.stream:
+        query = query.where(
+            or_(
+                Exam.stream.is_(None),
+                func.lower(Exam.stream).in_(["*", "all streams"]),
+                func.lower(Exam.stream) == student.stream.strip().lower(),
+            )
+        )
+    else:
+        query = query.where(
+            or_(
+                Exam.stream.is_(None),
+                func.lower(Exam.stream).in_(["*", "all streams"]),
+            )
+        )
+    return query
 
 
 def current_user():
@@ -393,6 +448,31 @@ def _exam_access(exam_id):
     return exam
 
 
+def _duplicate_exam_exists(
+    *,
+    created_by,
+    title,
+    subject,
+    department,
+    stream,
+    start_at,
+    end_at,
+    exclude_id=None,
+):
+    conditions = [
+        Exam.created_by == created_by,
+        func.lower(Exam.title) == title.strip().lower(),
+        func.lower(Exam.subject) == subject.strip().lower(),
+        func.lower(func.coalesce(Exam.department, "")) == (department or "").strip().lower(),
+        func.lower(func.coalesce(Exam.stream, "")) == (stream or "").strip().lower(),
+        Exam.start_at.is_(None) if start_at is None else Exam.start_at == start_at,
+        Exam.end_at.is_(None) if end_at is None else Exam.end_at == end_at,
+    ]
+    if exclude_id is not None:
+        conditions.append(Exam.id != exclude_id)
+    return db.session.scalar(select(Exam.id).where(*conditions).limit(1)) is not None
+
+
 def _active_attempt(attempt_id):
     attempt = db.get_or_404(Attempt, attempt_id)
     if attempt.student_id != current_user().id:
@@ -409,7 +489,13 @@ def _exam_open(exam, now=None):
     )
 
 
-def _save_answer(attempt, question_id, selected_option_id):
+def _save_answer(
+    attempt,
+    question_id,
+    selected_option_id=None,
+    response_text=None,
+    is_marked_for_review=None,
+):
     question = db.session.get(Question, question_id)
     if question is None or question.exam_id != attempt.exam_id:
         abort(400, description="That question does not belong to this examination.")
@@ -420,19 +506,140 @@ def _save_answer(attempt, question_id, selected_option_id):
             Answer.question_id == question.id,
         )
     )
-    if selected_option_id is None:
-        if answer:
-            db.session.delete(answer)
-        return
-
-    option = db.session.get(Option, selected_option_id)
-    if option is None or option.question_id != question.id:
-        abort(400, description="That answer choice is not valid for this question.")
     if answer is None:
         answer = Answer(attempt=attempt, question=question)
         db.session.add(answer)
-    answer.selected_option = option
-    answer.is_correct = False
+    if question.question_type == "subjective":
+        if selected_option_id is not None:
+            abort(400, description="Subjective responses cannot select an answer choice.")
+        response_text = (response_text or "").strip()
+        if len(response_text) > 10000:
+            abort(400, description="A written response is too long.")
+        answer.response_text = response_text or None
+        answer.selected_option = None
+        answer.is_correct = False
+    else:
+        if response_text and response_text.strip():
+            abort(400, description="Multiple-choice responses must select an answer choice.")
+        if selected_option_id is None:
+            answer.selected_option = None
+        else:
+            option = db.session.get(Option, selected_option_id)
+            if option is None or option.question_id != question.id:
+                abort(400, description="That answer choice is not valid for this question.")
+            answer.selected_option = option
+        answer.response_text = None
+        answer.is_correct = False
+    if is_marked_for_review is not None:
+        if type(is_marked_for_review) is not bool:
+            abort(400, description="Review status must be true or false.")
+        answer.is_marked_for_review = is_marked_for_review
+
+
+def _recalculate_attempt_score(attempt):
+    total = Decimal("0")
+    for answer in attempt.answers:
+        if answer.question.question_type == "subjective":
+            total += Decimal(answer.manual_score or 0)
+            continue
+        correct = (
+            answer.selected_option is not None
+            and answer.selected_option.question_id == answer.question_id
+            and answer.selected_option.is_correct
+        )
+        answer.is_correct = bool(correct)
+        if correct:
+            total += Decimal(answer.question.marks)
+        elif answer.selected_option is not None:
+            total -= Decimal(attempt.exam.negative_marks_per_wrong or 0)
+    attempt.score = max(
+        Decimal("0"),
+        min(total, Decimal(attempt.exam.total_marks)),
+    )
+    return attempt.score
+
+
+def _pending_evaluation_count(attempt):
+    return sum(
+        answer.question.question_type == "subjective"
+        and bool(answer.response_text and answer.response_text.strip())
+        and answer.manual_score is None
+        for answer in attempt.answers
+    )
+
+
+def _record_activity(action, target_type, target_id, summary):
+    actor = current_user()
+    db.session.add(
+        ActivityLog(
+            actor_id=actor.id if actor else None,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            summary=summary[:500],
+        )
+    )
+
+
+def _system_setting(key, default):
+    setting = db.session.get(SystemSetting, key)
+    return setting.value if setting else default
+
+
+def _catalog_values(kind):
+    return db.session.scalars(
+        select(CatalogEntry.name)
+        .where(CatalogEntry.kind == kind, CatalogEntry.active.is_(True))
+        .order_by(CatalogEntry.name)
+    ).all()
+
+
+def _notify_exam_published(exam):
+    students = db.session.scalars(
+        select(User).where(User.role == "student", User.status == "active")
+    ).all()
+    for student in students:
+        if _student_can_access_exam(exam, student):
+            db.session.add(
+                Notification(
+                    user_id=student.id,
+                    title="New examination available",
+                    body=f"{exam.title} is now published.",
+                    link=url_for("exam_instructions", exam_id=exam.id),
+                )
+            )
+
+
+def _record_result_notification(attempt):
+    teacher = attempt.exam.creator
+    if teacher is not None:
+        db.session.add(
+            Notification(
+                user_id=teacher.id,
+                title="Examination submitted",
+                body=f"A student submitted {attempt.exam.title}.",
+                link=url_for("teacher_results"),
+            )
+        )
+
+
+def _attempt_seed(attempt, purpose):
+    material = f"{app.config['SECRET_KEY']}:{attempt.id}:{purpose}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+
+
+def _ordered_attempt_questions(attempt):
+    questions = list(attempt.exam.questions)
+    if attempt.exam.randomize_questions:
+        random.Random(_attempt_seed(attempt, "questions")).shuffle(questions)
+    return questions
+
+
+def _ordered_attempt_options(attempt, question):
+    options = list(question.options)
+    if attempt.exam.randomize_options:
+        random.Random(_attempt_seed(attempt, f"options:{question.id}")).shuffle(options)
+    return options
 
 
 def _submit_attempt(attempt, final_answers=None, reason="manual"):
@@ -442,13 +649,22 @@ def _submit_attempt(attempt, final_answers=None, reason="manual"):
     if reason == "manual" and attempt.deadline_at is not None and now >= attempt.deadline_at:
         reason = "time_expired"
     if attempt.deadline_at is not None and now < attempt.deadline_at and final_answers is not None:
-        for raw_question_id, raw_option_id in final_answers.items():
+        for raw_question_id, raw_value in final_answers.items():
             try:
                 question_id = int(raw_question_id)
-                option_id = int(raw_option_id) if raw_option_id else None
             except (TypeError, ValueError):
-                abort(400, description="An answer contains an invalid question or option.")
-            _save_answer(attempt, question_id, option_id)
+                abort(400, description="An answer contains an invalid question.")
+            question = db.session.get(Question, question_id)
+            if question is None or question.exam_id != attempt.exam_id:
+                abort(400, description="That question does not belong to this examination.")
+            if question.question_type == "subjective":
+                _save_answer(attempt, question_id, response_text=raw_value)
+            else:
+                try:
+                    option_id = int(raw_value) if raw_value else None
+                except (TypeError, ValueError):
+                    abort(400, description="An answer contains an invalid option.")
+                _save_answer(attempt, question_id, selected_option_id=option_id)
 
     answers_by_question = {answer.question_id: answer for answer in attempt.answers}
     for question in attempt.exam.questions:
@@ -457,20 +673,10 @@ def _submit_attempt(attempt, final_answers=None, reason="manual"):
             db.session.add(answer)
             answers_by_question[question.id] = answer
 
-    total = Decimal("0")
-    for answer in answers_by_question.values():
-        correct = (
-            answer.selected_option is not None
-            and answer.selected_option.question_id == answer.question_id
-            and answer.selected_option.is_correct
-        )
-        answer.is_correct = bool(correct)
-        if correct:
-            total += Decimal(answer.question.marks)
-
-    attempt.score = min(total, Decimal(attempt.exam.total_marks))
+    _recalculate_attempt_score(attempt)
     attempt.submitted_at = now
     attempt.submission_reason = reason
+    _record_result_notification(attempt)
     db.session.commit()
     return True
 
@@ -489,6 +695,8 @@ def home():
 def register():
     if current_user():
         return redirect(_dashboard_for(current_user()))
+    if _system_setting("student_registration_enabled", "true").lower() != "true":
+        abort(403, description="Student registration is currently closed.")
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
@@ -518,7 +726,12 @@ def register():
             else:
                 flash("Your student account is ready. Please sign in.")
                 return redirect(url_for("login"))
-    return render_template("auth_form.html", mode="register")
+    return render_template(
+        "auth_form.html",
+        mode="register",
+        departments=_catalog_values("department"),
+        streams=_catalog_values("stream"),
+    )
 
 
 def _login_user(requested_role=None):
@@ -597,6 +810,120 @@ def logout():
     return redirect(url_for("home"))
 
 
+@app.route("/profile", methods=["GET", "POST"])
+@login_required
+def profile():
+    user = current_user()
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name or len(name) > 120:
+            flash("Enter a name between 1 and 120 characters.", "error")
+        else:
+            if user.role == "student":
+                roll_number = request.form.get("roll_number", "").strip()
+                if not roll_number or len(roll_number) > 50:
+                    flash("Enter a roll number between 1 and 50 characters.", "error")
+                    return render_template(
+                        "profile.html",
+                        departments=_catalog_values("department"),
+                        streams=_catalog_values("stream"),
+                    )
+                user.roll_number = roll_number
+            user.name = name
+            _record_activity("profile_updated", "user", user.id, "Updated own profile.")
+            db.session.commit()
+            flash("Your profile was updated.")
+            return redirect(url_for("profile"))
+    return render_template(
+        "profile.html",
+        departments=_catalog_values("department"),
+        streams=_catalog_values("stream"),
+    )
+
+
+@app.post("/profile/password")
+@login_required
+def change_password():
+    user = current_user()
+    current_password = request.form.get("current_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+    if user.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        current_matches = bcrypt.checkpw(
+            current_password.encode()[:72], user.password_hash.encode()
+        )
+    else:
+        current_matches = check_password_hash(user.password_hash, current_password)
+    if not current_matches:
+        flash("The current password is incorrect.", "error")
+    elif len(new_password) < 8:
+        flash("Use a new password with at least 8 characters.", "error")
+    elif new_password != confirm_password:
+        flash("The new password entries do not match.", "error")
+    else:
+        user.password_hash = generate_password_hash(new_password)
+        _record_activity("password_changed", "user", user.id, "Changed own password.")
+        db.session.commit()
+        flash("Your password was changed.")
+        return redirect(url_for("profile"))
+    return redirect(url_for("profile"))
+
+
+@app.get("/notifications")
+@login_required
+def notifications():
+    items = db.session.scalars(
+        select(Notification)
+        .where(Notification.user_id == current_user().id)
+        .order_by(Notification.created_at.desc())
+        .limit(100)
+    ).all()
+    unread_count = db.session.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == current_user().id,
+            Notification.read_at.is_(None),
+        )
+    ) or 0
+    return render_template(
+        "notifications.html", notifications=items, unread_count=unread_count
+    )
+
+
+@app.post("/notifications/read-all")
+@login_required
+def mark_notifications_read():
+    db.session.execute(
+        update(Notification)
+        .where(
+            Notification.user_id == current_user().id,
+            Notification.read_at.is_(None),
+        )
+        .values(read_at=utcnow())
+    )
+    db.session.commit()
+    flash("Notifications marked as read.")
+    return redirect(url_for("notifications"))
+
+
+@app.post("/notifications/<int:notification_id>/read")
+@login_required
+def mark_notification_read(notification_id):
+    notification = db.session.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user().id,
+        )
+    )
+    if notification is None:
+        abort(404)
+    if notification.read_at is None:
+        notification.read_at = utcnow()
+        db.session.commit()
+    if notification.link and notification.link.startswith("/") and not notification.link.startswith("//"):
+        return redirect(notification.link)
+    return redirect(url_for("notifications"))
+
+
 @app.route("/setup/first-admin", methods=["GET", "POST"])
 def first_admin():
     if _is_production():
@@ -638,14 +965,58 @@ def dashboard():
 @app.get("/admin")
 @roles_required("admin")
 def admin_dashboard():
+    now = utcnow()
     counts = {
-        "users": db.session.scalar(select(func.count(User.id))) or 0,
+        "students": db.session.scalar(
+            select(func.count(User.id)).where(User.role == "student")
+        ) or 0,
+        "teachers": db.session.scalar(
+            select(func.count(User.id)).where(User.role == "teacher")
+        ) or 0,
+        "admins": db.session.scalar(
+            select(func.count(User.id)).where(User.role == "admin")
+        ) or 0,
+        "active_users": db.session.scalar(
+            select(func.count(User.id)).where(User.status == "active")
+        ) or 0,
+        "inactive_users": db.session.scalar(
+            select(func.count(User.id)).where(User.status == "inactive")
+        ) or 0,
         "exams": db.session.scalar(select(func.count(Exam.id))) or 0,
         "questions": db.session.scalar(select(func.count(Question.id))) or 0,
         "attempts": db.session.scalar(select(func.count(Attempt.id))) or 0,
+        "active_exams": db.session.scalar(
+            select(func.count(Exam.id)).where(
+                Exam.status == "published",
+                Exam.questions.any(),
+                or_(Exam.start_at.is_(None), Exam.start_at <= now),
+                or_(Exam.end_at.is_(None), Exam.end_at >= now),
+            )
+        ) or 0,
+    }
+    chart_data = {
+        "users": [
+            {"label": "Students", "value": counts["students"]},
+            {"label": "Teachers", "value": counts["teachers"]},
+            {"label": "Admins", "value": counts["admins"]},
+        ],
+        "exams": [
+            {
+                "label": status.title(),
+                "value": db.session.scalar(
+                    select(func.count(Exam.id)).where(Exam.status == status)
+                ) or 0,
+            }
+            for status in ("published", "draft", "closed")
+        ],
     }
     recent_exams = db.session.scalars(select(Exam).order_by(Exam.created_at.desc()).limit(6)).all()
-    return render_template("admin_dashboard.html", counts=counts, recent_exams=recent_exams)
+    return render_template(
+        "admin_dashboard.html",
+        counts=counts,
+        recent_exams=recent_exams,
+        chart_data=chart_data,
+    )
 
 
 @app.route("/admin/users", methods=["GET", "POST"])
@@ -656,18 +1027,39 @@ def admin_users():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
         role = request.form.get("role", "")
-        if not name or "@" not in email or len(password) < 8 or role not in {"admin", "teacher"}:
-            flash("Enter valid account details and choose an administrator or teacher role.", "error")
-        else:
-            db.session.add(
-                User(
-                    name=name,
-                    email=email,
-                    password_hash=generate_password_hash(password),
-                    role=role,
-                )
+        roll_number = request.form.get("roll_number", "").strip()
+        department = request.form.get("department", "").strip()
+        stream = request.form.get("stream", "").strip()
+        if (
+            not name
+            or "@" not in email
+            or len(password) < 8
+            or role not in {"admin", "teacher", "student"}
+            or (
+                role == "student"
+                and (not roll_number or not department or not stream)
             )
+        ):
+            flash("Enter valid account details and complete the required student fields.", "error")
+        else:
+            account = User(
+                name=name,
+                email=email,
+                password_hash=generate_password_hash(password),
+                role=role,
+                roll_number=roll_number or None,
+                department=department or None,
+                stream=stream or None,
+            )
+            db.session.add(account)
             try:
+                db.session.flush()
+                _record_activity(
+                    "account_created",
+                    "user",
+                    account.id,
+                    f"Created a {role} account.",
+                )
                 db.session.commit()
             except IntegrityError:
                 db.session.rollback()
@@ -675,8 +1067,26 @@ def admin_users():
             else:
                 flash(f"{role.title()} account created.")
                 return redirect(url_for("admin_users"))
-    users = db.session.scalars(select(User).order_by(User.created_at.desc())).all()
-    return render_template("admin_users.html", users=users)
+    role_filter = request.args.get("role", "")
+    status_filter = request.args.get("status", "")
+    query = select(User).order_by(User.created_at.desc())
+    if role_filter in {"admin", "teacher", "student"}:
+        query = query.where(User.role == role_filter)
+    else:
+        role_filter = ""
+    if status_filter in {"active", "inactive"}:
+        query = query.where(User.status == status_filter)
+    else:
+        status_filter = ""
+    users = db.session.scalars(query).all()
+    return render_template(
+        "admin_users.html",
+        users=users,
+        selected_role=role_filter,
+        selected_status=status_filter,
+        departments=_catalog_values("department"),
+        streams=_catalog_values("stream"),
+    )
 
 
 @app.post("/admin/users/<int:user_id>/status")
@@ -687,6 +1097,12 @@ def update_user_status(user_id):
         flash("You cannot deactivate your own administrator account.", "error")
     else:
         user.status = "inactive" if user.status == "active" else "active"
+        _record_activity(
+            "account_status_changed",
+            "user",
+            user.id,
+            f"Changed {user.role} account status to {user.status}.",
+        )
         db.session.commit()
         flash(f"{user.name}'s account is now {user.status}.")
     return redirect(url_for("admin_users"))
@@ -697,13 +1113,15 @@ def update_user_status(user_id):
 def reset_user_password(user_id):
     user = db.get_or_404(User, user_id)
     password = request.form.get("password", "")
-    if len(password) < 8:
+    if user.id == current_user().id:
+        flash("Use the profile page to change your own password.", "error")
+    elif len(password) < 8:
         flash("The new password must contain at least 8 characters.", "error")
     else:
         user.password_hash = generate_password_hash(password)
-        user.status = "active"
+        _record_activity("password_reset", "user", user.id, "An administrator reset an account password.")
         db.session.commit()
-        flash(f"{user.name}'s temporary password is set to: {password}")
+        flash("The password was reset. Share the temporary password through a secure channel.")
     return redirect(url_for("admin_users"))
 
 
@@ -734,9 +1152,141 @@ def delete_user(user_id):
     db.session.execute(Question.__table__.delete().where(Question.exam_id.in_(created_exam_ids)))
     db.session.execute(Exam.__table__.delete().where(Exam.created_by == user.id))
     db.session.delete(user)
+    _record_activity("account_deleted", "user", user_id, "An administrator deleted an account.")
     db.session.commit()
     flash(f"{user.name}'s account was deleted.")
     return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/catalog", methods=["GET", "POST"])
+@roles_required("admin")
+def admin_catalog():
+    if request.method == "POST":
+        kind = request.form.get("kind", "")
+        name = request.form.get("name", "").strip()
+        if kind not in {"subject", "department", "stream"} or not name or len(name) > 120:
+            flash("Choose a valid catalog type and enter a name up to 120 characters.", "error")
+        else:
+            duplicate = db.session.scalar(
+                select(CatalogEntry.id).where(
+                    CatalogEntry.kind == kind,
+                    func.lower(CatalogEntry.name) == name.casefold(),
+                )
+            )
+            if duplicate:
+                flash("That catalog entry already exists.", "error")
+            else:
+                entry = CatalogEntry(
+                    kind=kind,
+                    name=name,
+                    created_by_id=current_user().id,
+                )
+                db.session.add(entry)
+                try:
+                    db.session.flush()
+                    _record_activity(
+                        "catalog_entry_created",
+                        "catalog",
+                        entry.id,
+                        f"Added a {kind} catalog entry.",
+                    )
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    flash("That catalog entry already exists.", "error")
+                else:
+                    flash(f"{kind.title()} added.")
+                    return redirect(url_for("admin_catalog"))
+    entries = db.session.scalars(
+        select(CatalogEntry).order_by(CatalogEntry.kind, CatalogEntry.name)
+    ).all()
+    return render_template("admin_catalog.html", entries=entries)
+
+
+@app.post("/admin/catalog/<int:entry_id>/toggle")
+@roles_required("admin")
+def toggle_catalog_entry(entry_id):
+    entry = db.get_or_404(CatalogEntry, entry_id)
+    entry.active = not entry.active
+    _record_activity(
+        "catalog_entry_status_changed",
+        "catalog",
+        entry.id,
+        f"Changed a {entry.kind} catalog entry to {'active' if entry.active else 'inactive'}.",
+    )
+    db.session.commit()
+    flash("Catalog entry status updated.")
+    return redirect(url_for("admin_catalog"))
+
+
+@app.route("/admin/settings", methods=["GET", "POST"])
+@roles_required("admin")
+def admin_settings():
+    defaults = {
+        "student_registration_enabled": "true",
+        "default_exam_duration": "60",
+        "default_negative_marks_per_wrong": "0",
+    }
+    if request.method == "POST":
+        registration_enabled = request.form.get("student_registration_enabled") == "on"
+        try:
+            duration = int(request.form.get("default_exam_duration", ""))
+            negative_marks = Decimal(
+                request.form.get("default_negative_marks_per_wrong", "")
+            )
+        except (ValueError, InvalidOperation):
+            flash("Enter a valid exam duration and negative-mark value.", "error")
+        else:
+            if (
+                not 1 <= duration <= 10080
+                or not negative_marks.is_finite()
+                or negative_marks < 0
+                or negative_marks > Decimal("9999.99")
+            ):
+                flash("Review the settings and enter values within the allowed ranges.", "error")
+            else:
+                updates = {
+                    "student_registration_enabled": str(registration_enabled).lower(),
+                    "default_exam_duration": str(duration),
+                    "default_negative_marks_per_wrong": str(negative_marks),
+                }
+                for key, value in updates.items():
+                    setting = db.session.get(SystemSetting, key)
+                    if setting is None:
+                        setting = SystemSetting(key=key, value=value)
+                        db.session.add(setting)
+                    else:
+                        setting.value = value
+                    setting.updated_by_id = current_user().id
+                _record_activity(
+                    "system_settings_updated",
+                    "system",
+                    None,
+                    "Updated registration and exam defaults.",
+                )
+                db.session.commit()
+                flash("System settings saved.")
+                return redirect(url_for("admin_settings"))
+    settings = {key: _system_setting(key, value) for key, value in defaults.items()}
+    return render_template("admin_settings.html", settings=settings)
+
+
+@app.get("/admin/activity")
+@roles_required("admin")
+def admin_activity():
+    entries = db.session.scalars(
+        select(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(200)
+    ).all()
+    return render_template("admin_activity.html", entries=entries)
+
+
+@app.get("/admin/monitoring")
+@roles_required("admin")
+def admin_monitoring():
+    attempts = db.session.scalars(
+        select(Attempt).join(Exam).order_by(Attempt.id.desc()).limit(200)
+    ).all()
+    return render_template("admin_monitoring.html", attempts=attempts)
 
 
 @app.get("/teacher")
@@ -747,10 +1297,45 @@ def teacher_dashboard():
     if user.role == "teacher":
         exams_query = exams_query.where(Exam.created_by == user.id)
     exams = db.session.scalars(exams_query).all()
+    exam_ids = [exam.id for exam in exams]
+    now = utcnow()
+    if exam_ids:
+        pending_evaluations = db.session.scalar(
+            select(func.count(Answer.id))
+            .join(Attempt, Answer.attempt_id == Attempt.id)
+            .join(Question, Answer.question_id == Question.id)
+            .where(
+                Attempt.exam_id.in_(exam_ids),
+                Attempt.submitted_at.is_not(None),
+                Question.question_type == "subjective",
+                Answer.response_text.is_not(None),
+                Answer.manual_score.is_(None),
+            )
+        ) or 0
+    else:
+        pending_evaluations = 0
+    active_exams = sum(
+        exam.status == "published"
+        and bool(exam.questions)
+        and (exam.start_at is None or exam.start_at <= now)
+        and (exam.end_at is None or exam.end_at >= now)
+        for exam in exams
+    )
+    metrics = {
+        "exams": len(exams),
+        "students": db.session.scalar(
+            select(func.count(User.id)).where(User.role == "student")
+        ) or 0,
+        "active_exams": active_exams,
+        "pending_evaluations": pending_evaluations,
+        "attempts": db.session.scalar(
+            select(func.count(Attempt.id)).where(Attempt.exam_id.in_(exam_ids))
+        ) or 0 if exam_ids else 0,
+    }
     return render_template(
         "teacher_dashboard.html",
         exams=exams,
-        attempt_count=sum(len(exam.attempts) for exam in exams),
+        metrics=metrics,
     )
 
 
@@ -762,6 +1347,7 @@ def create_exam():
             duration = int(request.form.get("duration_minutes", ""))
             total_marks = Decimal(request.form.get("total_marks", ""))
             target_question_count = int(request.form.get("target_question_count", ""))
+            negative_marks = Decimal(request.form.get("negative_marks_per_wrong", "0") or "0")
             start_at = _parse_datetime(
                 request.form.get("start_at") or request.form.get("start_at_local", "")
             )
@@ -776,12 +1362,16 @@ def create_exam():
             department = request.form.get("department", "").strip()
             stream = request.form.get("stream", "").strip()
             topics = request.form.get("topics", "").strip()
+            status = request.form.get("status", "draft")
             if (
                 not title
+                or len(title) > 180
                 or not subject
+                or len(subject) > 120
                 or not department
                 or not stream
                 or not topics
+                or status not in {"draft", "published", "closed"}
                 or len(department) > 120
                 or len(stream) > 120
                 or len(topics) > 2000
@@ -789,10 +1379,26 @@ def create_exam():
                 or not 1 <= duration <= 10080
                 or not total_marks.is_finite()
                 or not Decimal("0") < total_marks <= Decimal("999999.99")
+                or not negative_marks.is_finite()
+                or negative_marks < 0
+                or negative_marks > total_marks
                 or (start_at and end_at and end_at <= start_at)
             ):
                 flash("Enter valid exam details. The end time must be after the start time.", "error")
+            elif _duplicate_exam_exists(
+                created_by=current_user().id,
+                title=title,
+                subject=subject,
+                department=department,
+                stream=stream,
+                start_at=start_at,
+                end_at=end_at,
+            ):
+                flash("An examination with the same title, subject, audience, and schedule already exists.", "error")
             else:
+                if status == "published":
+                    status = "draft"
+                    flash("The examination was saved as a draft. Add questions before publishing it.")
                 exam = Exam(
                     title=title,
                     subject=subject,
@@ -803,18 +1409,34 @@ def create_exam():
                     description=request.form.get("description", "").strip(),
                     duration_minutes=duration,
                     total_marks=total_marks,
+                    negative_marks_per_wrong=negative_marks,
+                    randomize_questions=request.form.get("randomize_questions") == "on",
+                    randomize_options=request.form.get("randomize_options") == "on",
                     start_at=start_at,
                     end_at=end_at,
                     created_by=current_user().id,
-                    status=request.form.get("status", "published"),
+                    status=status,
                 )
-                if exam.status not in {"draft", "published", "closed"}:
-                    abort(400)
                 db.session.add(exam)
+                db.session.flush()
+                _record_activity("exam_created", "exam", exam.id, f"Created {exam.title}.")
                 db.session.commit()
-                flash("Examination created. Add its questions before students begin.")
+                if status != "draft":
+                    flash("Examination created.")
+                elif not request.form.get("status") == "published":
+                    flash("Examination created. Add questions, then publish it when ready.")
                 return redirect(url_for("manage_questions", exam_id=exam.id))
-    return render_template("exam_form.html", exam=None)
+    return render_template(
+        "exam_form.html",
+        exam=None,
+        catalog={
+            "subjects": _catalog_values("subject"),
+            "departments": _catalog_values("department"),
+            "streams": _catalog_values("stream"),
+        },
+        default_duration=_system_setting("default_exam_duration", "60"),
+        default_negative_marks=_system_setting("default_negative_marks_per_wrong", "0"),
+    )
 
 
 @app.route("/teacher/exams/<int:exam_id>/edit", methods=["GET", "POST"])
@@ -829,6 +1451,7 @@ def edit_exam(exam_id):
             duration = int(request.form.get("duration_minutes", ""))
             total_marks = Decimal(request.form.get("total_marks", ""))
             target_question_count = int(request.form.get("target_question_count", ""))
+            negative_marks = Decimal(request.form.get("negative_marks_per_wrong", "0") or "0")
             start_at = _parse_datetime(
                 request.form.get("start_at") or request.form.get("start_at_local", "")
             )
@@ -846,7 +1469,9 @@ def edit_exam(exam_id):
             status = request.form.get("status", "")
             if (
                 not title
+                or len(title) > 180
                 or not subject
+                or len(subject) > 120
                 or not department
                 or not stream
                 or not topics
@@ -857,11 +1482,27 @@ def edit_exam(exam_id):
                 or not 1 <= duration <= 10080
                 or not total_marks.is_finite()
                 or not Decimal("0") < total_marks <= Decimal("999999.99")
+                or not negative_marks.is_finite()
+                or negative_marks < 0
+                or negative_marks > total_marks
                 or status not in {"draft", "published", "closed"}
+                or (status == "published" and not exam.questions)
                 or (start_at and end_at and end_at <= start_at)
             ):
                 flash("Review the exam fields and enter a valid schedule.", "error")
+            elif _duplicate_exam_exists(
+                created_by=exam.created_by,
+                title=title,
+                subject=subject,
+                department=department,
+                stream=stream,
+                start_at=start_at,
+                end_at=end_at,
+                exclude_id=exam.id,
+            ):
+                flash("An examination with the same title, subject, audience, and schedule already exists.", "error")
             else:
+                old_status = exam.status
                 exam.title = title
                 exam.subject = subject
                 exam.department = department
@@ -871,13 +1512,70 @@ def edit_exam(exam_id):
                 exam.description = request.form.get("description", "").strip()
                 exam.duration_minutes = duration
                 exam.total_marks = total_marks
+                exam.negative_marks_per_wrong = negative_marks
+                exam.randomize_questions = request.form.get("randomize_questions") == "on"
+                exam.randomize_options = request.form.get("randomize_options") == "on"
                 exam.start_at = start_at
                 exam.end_at = end_at
                 exam.status = status
+                if old_status != "published" and status == "published":
+                    _notify_exam_published(exam)
+                _record_activity("exam_updated", "exam", exam.id, f"Updated {exam.title}.")
                 db.session.commit()
                 flash("Examination updated.")
                 return redirect(url_for("teacher_dashboard"))
-    return render_template("exam_form.html", exam=exam)
+    return render_template(
+        "exam_form.html",
+        exam=exam,
+        catalog={
+            "subjects": sorted({value for value in _catalog_values("subject") + [exam.subject] if value}),
+            "departments": sorted({value for value in _catalog_values("department") + [exam.department] if value}),
+            "streams": sorted({value for value in _catalog_values("stream") + [exam.stream] if value}),
+        },
+        default_duration=_system_setting("default_exam_duration", "60"),
+        default_negative_marks=_system_setting("default_negative_marks_per_wrong", "0"),
+    )
+
+
+@app.post("/teacher/exams/<int:exam_id>/status")
+@roles_required("teacher", "admin")
+def update_exam_status(exam_id):
+    exam = _exam_access(exam_id)
+    status = request.form.get("status", "")
+    if status not in {"draft", "published", "closed"}:
+        abort(400, description="Choose a valid examination status.")
+    if status == "published" and not exam.questions:
+        flash("Add at least one question before publishing this examination.", "error")
+    elif status != exam.status:
+        previous_status = exam.status
+        exam.status = status
+        if status == "published" and previous_status != "published":
+            _notify_exam_published(exam)
+        _record_activity(
+            "exam_status_changed",
+            "exam",
+            exam.id,
+            f"Changed {exam.title} status to {status}.",
+        )
+        db.session.commit()
+        flash(f"Examination is now {status}.")
+    return redirect(url_for("teacher_dashboard"))
+
+
+@app.post("/teacher/exams/<int:exam_id>/delete")
+@roles_required("teacher", "admin")
+def delete_exam(exam_id):
+    exam = _exam_access(exam_id)
+    if exam.attempts:
+        flash("An examination with student attempts cannot be deleted.", "error")
+    else:
+        exam_id = exam.id
+        title = exam.title
+        _record_activity("exam_deleted", "exam", exam_id, f"Deleted {title}.")
+        db.session.delete(exam)
+        db.session.commit()
+        flash("Examination deleted.")
+    return redirect(url_for("teacher_dashboard"))
 
 
 @app.route("/teacher/exams/<int:exam_id>/questions", methods=["GET", "POST"])
@@ -889,29 +1587,54 @@ def manage_questions(exam_id):
             flash("Questions are locked because a student has already started this examination.", "error")
             return redirect(url_for("manage_questions", exam_id=exam.id))
         question_text = request.form.get("question_text", "").strip()
+        question_type = request.form.get("question_type", "mcq")
         options = [item.strip() for item in request.form.getlist("options")]
         try:
             marks = Decimal(request.form.get("marks", "1"))
-            correct_index = int(request.form.get("correct_index", ""))
+            correct_index = (
+                int(request.form.get("correct_index", ""))
+                if question_type == "mcq"
+                else None
+            )
         except (ValueError, InvalidOperation):
             flash("Enter valid marks and select the correct answer.", "error")
         else:
             if (
                 not question_text
-                or len(options) != 4
-                or any(not option for option in options)
+                or question_type not in {"mcq", "subjective"}
+                or (
+                    question_type == "mcq"
+                    and (
+                        len(options) != 4
+                        or any(not option for option in options)
+                        or correct_index not in range(4)
+                    )
+                )
                 or not marks.is_finite()
                 or not Decimal("0") < marks <= Decimal("9999.99")
-                or correct_index not in range(4)
+                or (question_type == "subjective" and len(question_text) > 10000)
             ):
-                flash("Provide a question, four non-empty choices, positive marks, and one correct choice.", "error")
+                flash("Provide a valid question, positive marks, and four choices for MCQs.", "error")
             else:
-                question = Question(exam=exam, question_text=question_text, marks=marks)
-                question.options = [
-                    Option(option_text=text, is_correct=index == correct_index)
-                    for index, text in enumerate(options)
-                ]
+                question = Question(
+                    exam=exam,
+                    question_text=question_text,
+                    question_type=question_type,
+                    marks=marks,
+                )
+                if question_type == "mcq":
+                    question.options = [
+                        Option(option_text=text, is_correct=index == correct_index)
+                        for index, text in enumerate(options)
+                    ]
                 db.session.add(question)
+                db.session.flush()
+                _record_activity(
+                    "question_created",
+                    "question",
+                    question.id,
+                    f"Added a {question_type} question to {exam.title}.",
+                )
                 db.session.commit()
                 flash("Question added.")
                 return redirect(url_for("manage_questions", exam_id=exam.id))
@@ -921,6 +1644,264 @@ def manage_questions(exam_id):
         questions_locked=bool(exam.attempts),
         ai_available=bool(os.environ.get("GEMINI_API_KEY")),
     )
+
+
+def _read_question_import(file_storage):
+    extension = Path(file_storage.filename or "").suffix.lower()
+    if extension == ".csv":
+        try:
+            text = file_storage.read().decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise ValueError("CSV files must use UTF-8 encoding.") from error
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+    elif extension == ".xlsx":
+        from openpyxl import load_workbook
+        from openpyxl.utils.exceptions import InvalidFileException
+        from zipfile import BadZipFile
+
+        try:
+            workbook = load_workbook(
+                io.BytesIO(file_storage.read()), read_only=True, data_only=True
+            )
+        except (BadZipFile, EOFError, InvalidFileException, OSError) as error:
+            raise ValueError("The uploaded Excel file is invalid or unreadable.") from error
+        sheet = workbook.active
+        records = list(sheet.iter_rows(values_only=True))
+        if not records:
+            raise ValueError("The spreadsheet is empty.")
+        headers = [str(value or "").strip().lower() for value in records[0]]
+        rows = [
+            dict(zip(headers, record))
+            for record in records[1:]
+            if any(value is not None for value in record)
+        ]
+        workbook.close()
+    else:
+        raise ValueError("Choose a .csv or .xlsx file.")
+
+    if not rows:
+        raise ValueError("The import file does not contain any question rows.")
+    if len(rows) > 100:
+        raise ValueError("Import up to 100 questions at a time.")
+    required_headers = {"question_text", "marks"}
+    headers = {str(key or "").strip().lower() for key in (rows[0] or {})}
+    if not required_headers.issubset(headers):
+        raise ValueError("Include question_text and marks columns in the import file.")
+
+    questions = []
+    for row_number, raw_row in enumerate(rows, start=2):
+        row = {str(key or "").strip().lower(): value for key, value in raw_row.items()}
+        text = str(row.get("question_text") or "").strip()
+        question_type = str(row.get("type") or "mcq").strip().lower()
+        try:
+            marks = Decimal(str(row.get("marks") or ""))
+        except InvalidOperation as error:
+            raise ValueError(f"Row {row_number} has invalid marks.") from error
+        if (
+            not text
+            or len(text) > 10000
+            or question_type not in {"mcq", "subjective"}
+            or not marks.is_finite()
+            or not Decimal("0") < marks <= Decimal("9999.99")
+        ):
+            raise ValueError(f"Row {row_number} contains invalid question data.")
+
+        options = []
+        correct_index = None
+        if question_type == "mcq":
+            options = [
+                str(row.get(f"option_{letter}") or "").strip()
+                for letter in ("a", "b", "c", "d")
+            ]
+            correct_value = str(
+                row.get("correct_option", row.get("correct_index", ""))
+            ).strip().upper()
+            correct_index = (
+                ord(correct_value) - ord("A")
+                if correct_value in {"A", "B", "C", "D"}
+                else int(correct_value) if correct_value in {"0", "1", "2", "3"} else -1
+            )
+            if any(not option or len(option) > 2000 for option in options) or correct_index not in range(4):
+                raise ValueError(f"Row {row_number} needs four choices and a valid correct_option (A-D).")
+        questions.append(
+            {
+                "question_text": text,
+                "question_type": question_type,
+                "marks": marks,
+                "options": options,
+                "correct_index": correct_index,
+                "subject": str(row.get("subject") or "").strip(),
+            }
+        )
+    return questions
+
+
+@app.route("/teacher/question-bank", methods=["GET", "POST"])
+@roles_required("teacher", "admin")
+def question_bank():
+    if request.method == "POST":
+        question_text = request.form.get("question_text", "").strip()
+        subject = request.form.get("subject", "").strip()
+        question_type = request.form.get("question_type", "mcq")
+        raw_options = [value.strip() for value in request.form.getlist("options")]
+        try:
+            marks = Decimal(request.form.get("marks", "1"))
+            correct_index = (
+                int(request.form.get("correct_index", ""))
+                if question_type == "mcq"
+                else None
+            )
+        except (ValueError, InvalidOperation):
+            flash("Enter valid marks and select the correct MCQ choice.", "error")
+        else:
+            if (
+                not question_text
+                or not subject
+                or len(question_text) > 10000
+                or len(subject) > 120
+                or question_type not in {"mcq", "subjective"}
+                or not marks.is_finite()
+                or not Decimal("0") < marks <= Decimal("9999.99")
+                or (
+                    question_type == "mcq"
+                    and (
+                        len(raw_options) != 4
+                        or any(not option for option in raw_options)
+                        or correct_index not in range(4)
+                    )
+                )
+            ):
+                flash("Review the question, subject, marks, and MCQ choices.", "error")
+            else:
+                item = QuestionBankItem(
+                    owner_id=current_user().id,
+                    subject=subject,
+                    question_text=question_text,
+                    question_type=question_type,
+                    marks=marks,
+                    options=raw_options if question_type == "mcq" else [],
+                    correct_index=correct_index,
+                )
+                db.session.add(item)
+                db.session.flush()
+                _record_activity(
+                    "question_bank_item_created",
+                    "question_bank",
+                    item.id,
+                    f"Added a {question_type} item to the question bank.",
+                )
+                db.session.commit()
+                flash("Question saved to the bank.")
+                return redirect(url_for("question_bank"))
+
+    query = select(QuestionBankItem).order_by(QuestionBankItem.created_at.desc())
+    if current_user().role == "teacher":
+        query = query.where(QuestionBankItem.owner_id == current_user().id)
+    items = db.session.scalars(query.limit(500)).all()
+    exams_query = select(Exam).where(~Exam.attempts.any()).order_by(Exam.title)
+    if current_user().role == "teacher":
+        exams_query = exams_query.where(Exam.created_by == current_user().id)
+    exams = db.session.scalars(exams_query).all()
+    return render_template(
+        "question_bank.html",
+        items=items,
+        exams=exams,
+        subjects=_catalog_values("subject"),
+    )
+
+
+@app.post("/teacher/question-bank/import")
+@roles_required("teacher", "admin")
+def import_question_bank():
+    upload = request.files.get("question_file")
+    if upload is None or not upload.filename:
+        flash("Choose a CSV or Excel file to import.", "error")
+        return redirect(url_for("question_bank"))
+    try:
+        imported = _read_question_import(upload)
+    except (ValueError, OSError) as error:
+        flash(str(error), "error")
+        return redirect(url_for("question_bank"))
+
+    items = [
+        QuestionBankItem(
+            owner_id=current_user().id,
+            subject=item["subject"] or request.form.get("subject", "").strip(),
+            question_text=item["question_text"],
+            question_type=item["question_type"],
+            marks=item["marks"],
+            options=item["options"],
+            correct_index=item["correct_index"],
+        )
+        for item in imported
+    ]
+    if any(not item.subject or len(item.subject) > 120 for item in items):
+        flash("Provide a subject in the file or import form for every question.", "error")
+        return redirect(url_for("question_bank"))
+    db.session.add_all(items)
+    db.session.flush()
+    _record_activity(
+        "question_bank_imported",
+        "question_bank",
+        None,
+        f"Imported {len(items)} question bank items.",
+    )
+    db.session.commit()
+    flash(f"Imported {len(items)} questions.")
+    return redirect(url_for("question_bank"))
+
+
+@app.post("/teacher/question-bank/<int:item_id>/copy")
+@roles_required("teacher", "admin")
+def add_bank_question_to_exam(item_id):
+    item = db.get_or_404(QuestionBankItem, item_id)
+    if current_user().role == "teacher" and item.owner_id != current_user().id:
+        abort(403)
+    exam = _exam_access(request.form.get("exam_id", type=int))
+    if exam.attempts:
+        flash("Questions are locked because a student has started this examination.", "error")
+    else:
+        question = Question(
+            exam_id=exam.id,
+            question_text=item.question_text,
+            question_type=item.question_type,
+            marks=item.marks,
+        )
+        if item.question_type == "mcq":
+            question.options = [
+                Option(option_text=text, is_correct=index == item.correct_index)
+                for index, text in enumerate(item.options)
+            ]
+        db.session.add(question)
+        exam.target_question_count = len(exam.questions) + 1
+        _record_activity(
+            "question_bank_item_used",
+            "question",
+            item.id,
+            f"Copied a bank question into {exam.title}.",
+        )
+        db.session.commit()
+        flash("Question added to the examination.")
+    return redirect(url_for("manage_questions", exam_id=exam.id))
+
+
+@app.post("/teacher/question-bank/<int:item_id>/delete")
+@roles_required("teacher", "admin")
+def delete_question_bank_item(item_id):
+    item = db.get_or_404(QuestionBankItem, item_id)
+    if current_user().role == "teacher" and item.owner_id != current_user().id:
+        abort(403)
+    db.session.delete(item)
+    _record_activity(
+        "question_bank_item_deleted",
+        "question_bank",
+        item_id,
+        "Deleted a question bank item.",
+    )
+    db.session.commit()
+    flash("Question removed from the bank.")
+    return redirect(url_for("question_bank"))
 
 
 @app.post("/teacher/exams/<int:exam_id>/generate")
@@ -995,52 +1976,243 @@ def delete_question(question_id):
     if exam.attempts:
         flash("Questions cannot be removed after a student has started this examination.", "error")
     else:
+        question_id = question.id
+        _record_activity("question_deleted", "question", question_id, "Deleted an examination question.")
         db.session.delete(question)
         db.session.commit()
         flash("Question removed.")
     return redirect(url_for("manage_questions", exam_id=exam.id))
 
 
-@app.get("/teacher/results")
-@roles_required("teacher", "admin")
-def teacher_results():
+def _teacher_attempt_query():
     query = select(Attempt).join(Exam).where(Attempt.submitted_at.is_not(None))
     if current_user().role == "teacher":
         query = query.where(Exam.created_by == current_user().id)
-    attempts = db.session.scalars(query.order_by(Attempt.submitted_at.desc())).all()
-    return render_template("teacher_results.html", attempts=attempts)
+    exam_id = request.args.get("exam_id", type=int)
+    if exam_id is not None:
+        _exam_access(exam_id)
+        query = query.where(Attempt.exam_id == exam_id)
+    return query
+
+
+def _csv_safe(value):
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
+
+
+def _csv_download(filename, headers, rows):
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow([_csv_safe(value) for value in row])
+    response = make_response("\ufeff" + output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _pdf_download(filename, title, headers, rows):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+
+    def safe_text(value):
+        text = str(value if value is not None else "").encode("latin-1", "replace").decode("latin-1")
+        return escape(text)
+
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+    )
+    styles = getSampleStyleSheet()
+    cell_style = ParagraphStyle(
+        "CampusExamTableCell",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=9,
+        spaceAfter=0,
+    )
+    data = [[Paragraph(safe_text(value), cell_style) for value in headers]]
+    data.extend(
+        [[Paragraph(safe_text(value), cell_style) for value in row] for row in rows]
+    )
+    table = Table(
+        data,
+        colWidths=[document.width / max(len(headers), 1)] * len(headers),
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#202942")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#dfe3ed")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f8fb")]),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    document.build(
+        [
+            Paragraph(safe_text(title), styles["Title"]),
+            Spacer(1, 7 * mm),
+            table,
+        ]
+    )
+    response = make_response(buffer.getvalue())
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@app.get("/teacher/results")
+@roles_required("teacher", "admin")
+def teacher_results():
+    attempts = db.session.scalars(
+        _teacher_attempt_query().order_by(Attempt.submitted_at.desc())
+    ).all()
+    pending = {attempt.id: _pending_evaluation_count(attempt) for attempt in attempts}
+    return render_template(
+        "teacher_results.html", attempts=attempts, pending_evaluations=pending
+    )
+
+
+@app.route("/teacher/attempts/<int:attempt_id>", methods=["GET", "POST"])
+@roles_required("teacher", "admin")
+def teacher_attempt_detail(attempt_id):
+    attempt = db.get_or_404(Attempt, attempt_id)
+    _exam_access(attempt.exam_id)
+    if attempt.submitted_at is None:
+        abort(409, description="Only submitted examinations can be evaluated.")
+    if request.method == "POST":
+        updates = []
+        try:
+            for answer in attempt.answers:
+                if (
+                    answer.question.question_type != "subjective"
+                    or not (answer.response_text and answer.response_text.strip())
+                ):
+                    continue
+                raw_score = request.form.get(f"score_{answer.id}", "").strip()
+                if not raw_score:
+                    continue
+                score = Decimal(raw_score)
+                if (
+                    not score.is_finite()
+                    or score < 0
+                    or score > Decimal(answer.question.marks)
+                ):
+                    raise ValueError("Each score must be between zero and the question’s marks.")
+                feedback = request.form.get(f"feedback_{answer.id}", "").strip()
+                if len(feedback) > 5000:
+                    raise ValueError("Feedback must be 5,000 characters or fewer.")
+                updates.append((answer, score, feedback))
+        except (InvalidOperation, ValueError) as error:
+            flash(str(error) or "Enter a valid score.", "error")
+        else:
+            if not updates:
+                flash("Enter a score for at least one written response.", "error")
+            else:
+                for answer, score, feedback in updates:
+                    answer.manual_score = score
+                    answer.feedback = feedback or None
+                    answer.graded_by_id = current_user().id
+                    answer.graded_at = utcnow()
+                _recalculate_attempt_score(attempt)
+                _record_activity(
+                    "subjective_answers_graded",
+                    "attempt",
+                    attempt.id,
+                    f"Graded {len(updates)} written responses for {attempt.exam.title}.",
+                )
+                db.session.commit()
+                flash(f"Saved {len(updates)} written-response grade(s).")
+                return redirect(url_for("teacher_attempt_detail", attempt_id=attempt.id))
+    return render_template(
+        "teacher_attempt_detail.html",
+        attempt=attempt,
+        pending_count=_pending_evaluation_count(attempt),
+    )
+
+
+@app.get("/teacher/results.csv")
+@roles_required("teacher", "admin")
+def teacher_results_csv():
+    attempts = db.session.scalars(
+        _teacher_attempt_query().order_by(Attempt.submitted_at.desc())
+    ).all()
+    rows = []
+    for attempt in attempts:
+        total = Decimal(attempt.exam.total_marks)
+        rows.append(
+            [
+                attempt.student.name,
+                attempt.student.roll_number or attempt.student.email,
+                attempt.exam.title,
+                attempt.exam.subject,
+                attempt.score if not _pending_evaluation_count(attempt) else "Pending",
+                total,
+                round(float(attempt.score / total * 100), 1) if total and not _pending_evaluation_count(attempt) else "",
+                attempt.submitted_at.isoformat(),
+            ]
+        )
+    return _csv_download(
+        "campusexam-results.csv",
+        ["Student", "Roll / Email", "Examination", "Subject", "Score", "Total", "Percent", "Submitted"],
+        rows,
+    )
+
+
+@app.get("/teacher/results.pdf")
+@roles_required("teacher", "admin")
+def teacher_results_pdf():
+    attempts = db.session.scalars(
+        _teacher_attempt_query().order_by(Attempt.submitted_at.desc())
+    ).all()
+    rows = []
+    for attempt in attempts:
+        total = Decimal(attempt.exam.total_marks)
+        pending = _pending_evaluation_count(attempt)
+        rows.append(
+            [
+                attempt.student.name,
+                attempt.exam.title,
+                attempt.exam.subject,
+                "Pending" if pending else f"{attempt.score} / {total}",
+                "Pending" if pending else f"{float(attempt.score / total * 100):.1f}%",
+                attempt.submitted_at.strftime("%Y-%m-%d %H:%M UTC"),
+            ]
+        )
+    return _pdf_download(
+        "campusexam-results.pdf",
+        "CampusExam student results",
+        ["Student", "Examination", "Subject", "Score", "Percent", "Submitted"],
+        rows,
+    )
 
 
 @app.get("/student")
 @roles_required("student")
 def student_dashboard():
     student = current_user()
-    exam_query = select(Exam).where(Exam.status == "published")
-    if student.department:
-        exam_query = exam_query.where(
-            or_(
-                Exam.department.is_(None),
-                func.lower(Exam.department).in_(["*", "all departments"]),
-                func.lower(Exam.department) == student.department.strip().lower(),
-            )
-        )
-    else:
-        exam_query = exam_query.where(
-            or_(Exam.department.is_(None), func.lower(Exam.department).in_(["*", "all departments"]))
-        )
-    if student.stream:
-        exam_query = exam_query.where(
-            or_(
-                Exam.stream.is_(None),
-                func.lower(Exam.stream).in_(["*", "all streams"]),
-                func.lower(Exam.stream) == student.stream.strip().lower(),
-            )
-        )
-    else:
-        exam_query = exam_query.where(
-            or_(Exam.stream.is_(None), func.lower(Exam.stream).in_(["*", "all streams"]))
-        )
-    exams = db.session.scalars(exam_query.order_by(Exam.created_at.desc())).all()
+    exams = db.session.scalars(
+        _student_exam_query(student).order_by(Exam.start_at, Exam.created_at.desc())
+    ).all()
     attempts = {
         attempt.exam_id: attempt
         for attempt in db.session.scalars(
@@ -1048,7 +2220,87 @@ def student_dashboard():
         ).all()
     }
     now = utcnow()
-    return render_template("student_dashboard.html", exams=exams, attempts=attempts, now=now)
+    completed_attempts = sorted(
+        (attempt for attempt in attempts.values() if attempt.submitted_at is not None),
+        key=lambda attempt: attempt.submitted_at,
+        reverse=True,
+    )
+    pending_evaluations = {
+        attempt.id: _pending_evaluation_count(attempt)
+        for attempt in completed_attempts
+    }
+    upcoming_exams = [
+        exam
+        for exam in exams
+        if exam.start_at is not None
+        and exam.start_at > now
+        and exam.id not in attempts
+    ]
+    available_exams = [
+        exam
+        for exam in exams
+        if _exam_open(exam, now)
+        and (
+            exam.id not in attempts
+            or attempts[exam.id].submitted_at is None
+        )
+    ]
+    percentages = [
+        float(attempt.score / attempt.exam.total_marks * 100)
+        for attempt in completed_attempts
+        if attempt.exam.total_marks and not _pending_evaluation_count(attempt)
+    ]
+    subject_scores = {}
+    for attempt in completed_attempts:
+        if not attempt.exam.total_marks or _pending_evaluation_count(attempt):
+            continue
+        values = subject_scores.setdefault(attempt.exam.subject, [])
+        values.append(float(attempt.score / attempt.exam.total_marks * 100))
+    subject_performance = [
+        {"label": subject, "value": round(sum(scores) / len(scores), 1)}
+        for subject, scores in sorted(subject_scores.items())
+    ]
+    overall_performance = [
+        {
+            "label": attempt.submitted_at.strftime("%b %d"),
+            "value": round(float(attempt.score / attempt.exam.total_marks * 100), 1),
+        }
+        for attempt in reversed(completed_attempts[-10:])
+        if attempt.exam.total_marks and not _pending_evaluation_count(attempt)
+    ]
+    notifications_list = db.session.scalars(
+        select(Notification)
+        .where(Notification.user_id == student.id)
+        .order_by(Notification.created_at.desc())
+        .limit(5)
+    ).all()
+    unread_count = db.session.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == student.id,
+            Notification.read_at.is_(None),
+        )
+    ) or 0
+    stats = {
+        "available": len(available_exams),
+        "completed": len(completed_attempts),
+        "upcoming": len(upcoming_exams),
+        "average_score": round(sum(percentages) / len(percentages), 1) if percentages else None,
+    }
+    return render_template(
+        "student_dashboard.html",
+        exams=exams,
+        attempts=attempts,
+        now=now,
+        stats=stats,
+        available_exams=available_exams,
+        upcoming_exams=upcoming_exams,
+        completed_attempts=completed_attempts[:5],
+        pending_evaluations=pending_evaluations,
+        subject_performance=subject_performance,
+        overall_performance=overall_performance,
+        notifications=notifications_list,
+        unread_count=unread_count,
+    )
 
 
 @app.get("/student/exams/<int:exam_id>/instructions")
@@ -1146,8 +2398,26 @@ def take_exam(attempt_id):
         _submit_attempt(attempt, reason="time_expired")
         flash("Time expired. Your saved answers have been submitted.")
         return redirect(url_for("student_result", attempt_id=attempt.id))
-    saved = {answer.question_id: answer.selected_option_id for answer in attempt.answers}
-    return render_template("take_exam.html", attempt=attempt, saved=saved)
+    saved = {
+        answer.question_id: {
+            "option_id": answer.selected_option_id,
+            "response_text": answer.response_text or "",
+            "review": answer.is_marked_for_review,
+        }
+        for answer in attempt.answers
+    }
+    questions = _ordered_attempt_questions(attempt)
+    options_by_question = {
+        question.id: _ordered_attempt_options(attempt, question)
+        for question in questions
+    }
+    return render_template(
+        "take_exam.html",
+        attempt=attempt,
+        saved=saved,
+        questions=questions,
+        options_by_question=options_by_question,
+    )
 
 
 @app.post("/api/attempts/<int:attempt_id>/proctoring-violations")
@@ -1207,13 +2477,24 @@ def autosave_answer(attempt_id):
         _submit_attempt(attempt, reason="time_expired")
         return jsonify(status="submitted", redirect=url_for("student_result", attempt_id=attempt.id))
     payload = request.get_json(silent=False)
+    if not isinstance(payload, dict):
+        abort(400, description="Provide a valid answer payload.")
     try:
         question_id = int(payload["question_id"])
         raw_option_id = payload.get("option_id")
         option_id = int(raw_option_id) if raw_option_id is not None else None
     except (TypeError, ValueError, KeyError):
         abort(400, description="Provide a valid question_id and option_id.")
-    _save_answer(attempt, question_id, option_id)
+    response_text = payload.get("response_text")
+    if response_text is not None and not isinstance(response_text, str):
+        abort(400, description="A written response must be text.")
+    _save_answer(
+        attempt,
+        question_id,
+        option_id,
+        response_text=response_text,
+        is_marked_for_review=payload.get("is_marked_for_review"),
+    )
     db.session.commit()
     return jsonify(status="saved", saved_at=utcnow().isoformat())
 
@@ -1246,7 +2527,14 @@ def student_results():
         .where(Attempt.student_id == current_user().id, Attempt.submitted_at.is_not(None))
         .order_by(Attempt.submitted_at.desc())
     ).all()
-    return render_template("student_results.html", attempts=attempts, selected=None)
+    pending = {attempt.id: _pending_evaluation_count(attempt) for attempt in attempts}
+    return render_template(
+        "student_results.html",
+        attempts=attempts,
+        selected=None,
+        pending_evaluations=pending,
+        selected_pending=0,
+    )
 
 
 @app.get("/student/results/<int:attempt_id>")
@@ -1255,7 +2543,40 @@ def student_result(attempt_id):
     attempt = _active_attempt(attempt_id)
     if attempt.submitted_at is None:
         return redirect(url_for("take_exam", attempt_id=attempt.id))
-    return render_template("student_results.html", attempts=[attempt], selected=attempt)
+    return render_template(
+        "student_results.html",
+        attempts=[attempt],
+        selected=attempt,
+        pending_evaluations={attempt.id: _pending_evaluation_count(attempt)},
+        selected_pending=_pending_evaluation_count(attempt),
+    )
+
+
+@app.get("/student/results/<int:attempt_id>/pdf")
+@roles_required("student")
+def student_result_pdf(attempt_id):
+    attempt = _active_attempt(attempt_id)
+    if attempt.submitted_at is None:
+        abort(404)
+    pending = _pending_evaluation_count(attempt)
+    total = Decimal(attempt.exam.total_marks)
+    rows = [
+        [
+            attempt.student.name,
+            attempt.student.roll_number or attempt.student.email,
+            attempt.exam.title,
+            attempt.exam.subject,
+            "Pending manual grading" if pending else f"{attempt.score} / {total}",
+            "Pending" if pending else f"{float(attempt.score / total * 100):.1f}%",
+            attempt.submitted_at.strftime("%Y-%m-%d %H:%M UTC"),
+        ]
+    ]
+    return _pdf_download(
+        f"campusexam-result-{attempt.id}.pdf",
+        "CampusExam examination result",
+        ["Student", "Roll / Email", "Examination", "Subject", "Score", "Percent", "Submitted"],
+        rows,
+    )
 
 
 @app.cli.command("init-db")

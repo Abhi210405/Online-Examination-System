@@ -138,9 +138,9 @@ To enable AI exam generation, add `GEMINI_API_KEY` to the server environment
 (never to source control or browser-side settings). Teachers and administrators
 can generate up to 50 MCQs from the exam's department, stream, subject, and
 topics; the existing manual question builder remains available without an AI
-key. Exam targeting fields and student stream support are added by the latest
-database migration, so apply migrations with `flask db upgrade` before using
-the new exam form.
+key. Exam targeting, student stream, question-bank, notification, grading, and
+exam-randomization fields are added by the checked-in database migrations, so
+apply migrations with `flask db upgrade` before using the updated dashboards.
 
 ### 2. Apply migrations and create the first administrator
 
@@ -228,12 +228,20 @@ changes are never automatically created on a web request.
 
 ## Existing capabilities
 
-- Admin: account provisioning/status, portal statistics, examination and
-  result visibility.
-- Teacher: exam scheduling and publication, four-choice question sets, and
-  result review.
-- Student: registration, scheduled exams, timed attempts, autosave, automatic
-  deadline submission, and results.
+- Admin: live role/account/exam/attempt statistics, account activation and
+  provisioning, academic catalogs, examination monitoring, activity logs,
+  and registration/exam defaults.
+- Teacher: exam scheduling and status controls, MCQ and written questions,
+  CSV/XLSX question-bank import and reuse, attempt monitoring, manual written
+  grading, and downloadable CSV/PDF result reports.
+- Student: profile and password management, exam availability/schedule,
+  performance charts, notifications, timed attempts with saved answers and
+  review flags, and private result history/PDF downloads.
+- Exams: stable per-attempt question/option randomization, configurable
+  negative marking, MCQ auto-scoring, server-validated written responses, and
+  automatic submission on expiry.
+- Dashboard tables provide in-page search and pagination; layouts adapt to
+  mobile and tablet widths.
 - Session-bound CSRF validation, role checks, password hashing/legacy bcrypt
   verification, secure production cookies, and security headers.
 - `scripts/import_mysql.py` remains available for importing the legacy MySQL

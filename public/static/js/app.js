@@ -38,6 +38,206 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  document.querySelectorAll("[data-role-select]").forEach((select) => {
+    const form = select.form;
+    const fields = form?.querySelector("[data-student-fields]");
+    if (!fields) return;
+    const update = () => {
+      const visible = select.value === "student";
+      fields.hidden = !visible;
+      fields.querySelectorAll("input").forEach((input) => {
+        input.required = visible;
+      });
+    };
+    select.addEventListener("change", update);
+    update();
+  });
+
+  document.querySelectorAll("[data-question-type]").forEach((select) => {
+    const fields = select.form?.querySelector("[data-mcq-fields]");
+    if (!fields) return;
+    const update = () => {
+      const visible = select.value === "mcq";
+      fields.hidden = !visible;
+      fields.querySelectorAll("input, select").forEach((input) => {
+        input.required = visible;
+      });
+    };
+    select.addEventListener("change", update);
+    update();
+  });
+
+  document.querySelectorAll("[data-enhanced-table]").forEach((table) => {
+    const rows = [...table.querySelectorAll("tbody tr")].filter((row) => row.cells.length > 1);
+    if (rows.length === 0) return;
+    const wrapper = table.closest(".table-wrap");
+    const controls = document.createElement("div");
+    controls.className = "table-controls";
+    const searchLabel = document.createElement("label");
+    searchLabel.className = "table-search";
+    searchLabel.textContent = "Search";
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Search this table";
+    search.setAttribute("aria-label", "Search table rows");
+    searchLabel.append(search);
+    const pager = document.createElement("div");
+    pager.className = "table-pager";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "button button-outline button-sm";
+    previous.textContent = "Previous";
+    const status = document.createElement("span");
+    status.setAttribute("aria-live", "polite");
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "button button-outline button-sm";
+    next.textContent = "Next";
+    pager.append(previous, status, next);
+    controls.append(searchLabel, pager);
+    wrapper?.parentNode.insertBefore(controls, wrapper);
+    let page = 0;
+    const pageSize = 10;
+    const paint = () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      const filtered = rows.filter((row) => row.textContent.toLocaleLowerCase().includes(query));
+      const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+      page = Math.min(page, pageCount - 1);
+      rows.forEach((row) => {
+        row.hidden = !filtered.includes(row);
+      });
+      filtered.slice(page * pageSize, (page + 1) * pageSize).forEach((row) => {
+        row.hidden = false;
+      });
+      status.textContent = filtered.length
+        ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, filtered.length)} of ${filtered.length}`
+        : "No matching rows";
+      previous.disabled = page === 0;
+      next.disabled = page >= pageCount - 1;
+    };
+    search.addEventListener("input", () => {
+      page = 0;
+      paint();
+    });
+    previous.addEventListener("click", () => {
+      page -= 1;
+      paint();
+    });
+    next.addEventListener("click", () => {
+      page += 1;
+      paint();
+    });
+    paint();
+  });
+
+  document.querySelectorAll("canvas[data-chart]").forEach((canvas) => {
+    let points;
+    try {
+      points = JSON.parse(canvas.dataset.chartData || "[]");
+    } catch (error) {
+      console.error("Could not read chart data.", error);
+      return;
+    }
+    if (!Array.isArray(points) || points.length === 0) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const tooltip = canvas.parentElement.querySelector("[data-chart-tooltip]");
+    const render = () => {
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(280, canvas.clientWidth);
+      const height = 220;
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const margin = { top: 14, right: 12, bottom: 42, left: 36 };
+      const chartWidth = width - margin.left - margin.right;
+      const chartHeight = height - margin.top - margin.bottom;
+      const maximum = Math.max(1, ...points.map((point) => Number(point.value) || 0));
+      const ceiling = Math.ceil(maximum / 10) * 10 || 10;
+      const chartHits = [];
+      context.font = "10px DM Sans, Arial";
+      context.textAlign = "right";
+      context.fillStyle = "#929bad";
+      for (let tick = 0; tick <= 4; tick += 1) {
+        const y = margin.top + chartHeight - (chartHeight * tick) / 4;
+        context.strokeStyle = "#edf0f5";
+        context.beginPath();
+        context.moveTo(margin.left, y);
+        context.lineTo(width - margin.right, y);
+        context.stroke();
+        context.fillText(String(Math.round((ceiling * tick) / 4)), margin.left - 7, y + 3);
+      }
+      const slotWidth = chartWidth / points.length;
+      if (canvas.dataset.chart === "line") {
+        context.strokeStyle = "#596ee5";
+        context.lineWidth = 2;
+        context.beginPath();
+      }
+      points.forEach((point, index) => {
+        const value = Math.max(0, Number(point.value) || 0);
+        const barHeight = (value / ceiling) * chartHeight;
+        const centerX = margin.left + slotWidth * (index + 0.5);
+        const y = margin.top + chartHeight - barHeight;
+        if (canvas.dataset.chart === "line") {
+          if (index === 0) context.moveTo(centerX, y);
+          else context.lineTo(centerX, y);
+          context.fillStyle = "#596ee5";
+          context.beginPath();
+          context.arc(centerX, y, 3.5, 0, Math.PI * 2);
+          context.fill();
+          chartHits.push({ x: centerX, y, width: slotWidth, label: point.label, value: point.value });
+          context.strokeStyle = "#596ee5";
+          context.beginPath();
+          if (index > 0) {
+            const prior = points[index - 1];
+            const priorValue = Math.max(0, Number(prior.value) || 0);
+            const priorX = margin.left + slotWidth * (index - 0.5);
+            const priorY = margin.top + chartHeight - (priorValue / ceiling) * chartHeight;
+            context.moveTo(priorX, priorY);
+            context.lineTo(centerX, y);
+            context.stroke();
+          }
+        } else {
+          const barWidth = Math.min(42, slotWidth * 0.58);
+          context.fillStyle = index % 2 ? "#7659e9" : "#596ee5";
+          context.beginPath();
+          context.fillRect(centerX - barWidth / 2, y, barWidth, barHeight);
+          context.fill();
+          chartHits.push({ x: centerX - barWidth / 2, y, width: barWidth, height: barHeight, label: point.label, value: point.value });
+        }
+        context.fillStyle = "#7e8799";
+        context.textAlign = "center";
+        context.fillText(String(point.label).slice(0, 14), centerX, height - 19);
+        context.fillStyle = "#49546b";
+        context.fillText(String(point.value), centerX, Math.max(margin.top + 10, y - 6));
+      });
+      canvas.dataset.chartHits = JSON.stringify(chartHits);
+    };
+    canvas.addEventListener("mousemove", (event) => {
+      if (!tooltip) return;
+      const bounds = canvas.getBoundingClientRect();
+      const x = event.clientX - bounds.left;
+      const y = event.clientY - bounds.top;
+      let hovered;
+      try {
+        const hits = JSON.parse(canvas.dataset.chartHits || "[]");
+        if (canvas.dataset.chart === "line") {
+          hovered = hits.find((point) =>
+            Math.abs(x - point.x) <= point.width / 2 && Math.abs(y - point.y) <= 14);
+        } else {
+          hovered = hits.find((bar) =>
+            x >= bar.x && x <= bar.x + bar.width && y >= bar.y && y <= bar.y + bar.height);
+        }
+      } catch {
+        return;
+      }
+      tooltip.textContent = hovered ? `${hovered.label}: ${hovered.value}` : "";
+    });
+    render();
+    window.addEventListener("resize", render);
+  });
+
   const form = document.querySelector("[data-exam-form]");
   if (!form) return;
 
@@ -63,29 +263,55 @@ document.addEventListener("DOMContentLoaded", () => {
   let faceMissingReported = false;
   let timerInterval = null;
   let submitting = false;
+  const questionPanels = [...form.querySelectorAll("[data-question-panel]")];
+  const saveTimers = new Map();
+  let activeQuestion = 0;
 
   function updateProgress() {
-    const questions = [...form.querySelectorAll("[data-question-id]")];
-    const answered = new Set(
-      questions.filter((input) => input.checked).map((input) => input.dataset.questionId),
-    );
+    const answered = new Set();
+    const marked = new Set();
+    questionPanels.forEach((panel) => {
+      const questionId = panel.dataset.questionPanel;
+      const response = panel.querySelector("[data-response-text]");
+      const hasAnswer = response
+        ? Boolean(response.value.trim())
+        : Boolean(panel.querySelector("[data-question-input]:checked"));
+      if (hasAnswer) answered.add(questionId);
+      const reviewButton = panel.querySelector("[data-review-toggle]");
+      if (reviewButton?.getAttribute("aria-pressed") === "true") marked.add(questionId);
+    });
     document.querySelector("[data-answered-count]").textContent = String(answered.size);
     document.querySelector("[data-progress-bar]").style.width =
-      `${questions.length ? (answered.size / new Set(questions.map((input) => input.dataset.questionId)).size) * 100 : 0}%`;
+      `${questionPanels.length ? (answered.size / questionPanels.length) * 100 : 0}%`;
     document.querySelectorAll("[data-question-nav]").forEach((link) => {
       link.classList.toggle("is-answered", answered.has(link.dataset.questionNav));
+      link.classList.toggle("is-marked", marked.has(link.dataset.questionNav));
+      link.classList.toggle("is-current", Number(link.dataset.questionIndex) === activeQuestion);
     });
     form.querySelectorAll(".exam-option").forEach((label) => {
       label.classList.toggle("is-selected", label.querySelector("input").checked);
     });
   }
 
-  async function saveAnswer(input) {
-    const questionId = input.dataset.questionId;
-    const optionId = input.checked ? Number(input.value) : null;
+  function showQuestion(index, focus = false) {
+    activeQuestion = Math.max(0, Math.min(index, questionPanels.length - 1));
+    questionPanels.forEach((panel, panelIndex) => {
+      panel.hidden = panelIndex !== activeQuestion;
+    });
+    updateProgress();
+    if (focus) {
+      questionPanels[activeQuestion]?.scrollIntoView({ behavior: "smooth", block: "start" });
+      questionPanels[activeQuestion]?.querySelector("[data-question-input]")?.focus({ preventScroll: true });
+    }
+  }
+
+  async function saveAnswer(questionId) {
+    const panel = form.querySelector(`[data-question-panel="${questionId}"]`);
+    const selected = panel.querySelector("[data-question-input]:checked");
+    const responseText = panel.querySelector("[data-response-text]");
+    const review = panel.querySelector("[data-review-toggle]")?.getAttribute("aria-pressed") === "true";
     const previous = queueByQuestion.get(questionId) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
-      if (submitting) return;
       saveStatus.textContent = "Saving…";
       timer.classList.remove("save-error");
       const response = await fetch(form.dataset.autosaveUrl, {
@@ -95,7 +321,12 @@ document.addEventListener("DOMContentLoaded", () => {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
         },
-        body: JSON.stringify({ question_id: Number(questionId), option_id: optionId }),
+        body: JSON.stringify({
+          question_id: Number(questionId),
+          option_id: selected ? Number(selected.value) : null,
+          response_text: responseText ? responseText.value : null,
+          is_marked_for_review: review,
+        }),
       });
       const payload = await response.json();
       if (payload.redirect) {
@@ -113,12 +344,54 @@ document.addEventListener("DOMContentLoaded", () => {
     return queued;
   }
 
-  form.querySelectorAll("[data-question-id]").forEach((input) => {
-    input.addEventListener("change", () => {
+  form.querySelectorAll("[data-question-input]").forEach((input) => {
+    const saveAndRefresh = () => {
       updateProgress();
-      saveAnswer(input).catch(() => undefined);
+      saveAnswer(input.dataset.questionId).catch(() => undefined);
+    };
+    input.addEventListener(input.matches("textarea") ? "input" : "change", () => {
+      if (input.matches("textarea")) {
+        updateProgress();
+        window.clearTimeout(saveTimers.get(input.dataset.questionId));
+        saveTimers.set(
+          input.dataset.questionId,
+          window.setTimeout(
+            () => saveAnswer(input.dataset.questionId).catch(() => undefined),
+            450,
+          ),
+        );
+      } else {
+        saveAndRefresh();
+      }
+    });
+    if (input.matches("textarea")) {
+      input.addEventListener("blur", () => {
+        window.clearTimeout(saveTimers.get(input.dataset.questionId));
+        saveAndRefresh();
+      });
+    }
+  });
+
+  form.querySelectorAll("[data-review-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const marked = button.getAttribute("aria-pressed") !== "true";
+      button.setAttribute("aria-pressed", String(marked));
+      button.classList.toggle("is-marked", marked);
+      button.querySelector("span").textContent = marked ? "Marked for review" : "Mark for review";
+      updateProgress();
+      saveAnswer(button.dataset.reviewToggle).catch(() => undefined);
     });
   });
+
+  questionPanels.forEach((panel, index) => {
+    panel.querySelector("[data-question-prev]")?.addEventListener("click", () => showQuestion(index - 1, true));
+    panel.querySelector("[data-question-next]")?.addEventListener("click", () => showQuestion(index + 1, true));
+  });
+  document.querySelectorAll("[data-question-nav]").forEach((button, index) => {
+    button.dataset.questionIndex = String(index);
+    button.addEventListener("click", () => showQuestion(index, true));
+  });
+  showQuestion(0);
 
   form.addEventListener("submit", (event) => {
     if (!started) {
@@ -129,11 +402,14 @@ document.addEventListener("DOMContentLoaded", () => {
       event.preventDefault();
       return;
     }
+    event.preventDefault();
     submitting = true;
     form.querySelectorAll("button[type=submit]").forEach((button) => {
       button.disabled = true;
       button.textContent = "Submitting…";
     });
+    saveStatus.textContent = "Saving final changes…";
+    Promise.allSettled([...queueByQuestion.values()]).then(() => form.submit());
   });
 
   updateProgress();

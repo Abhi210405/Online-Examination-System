@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Question bank{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">TEACHING WORKSPACE / QUESTION BANK</span><h1>Question bank</h1><p>Create reusable MCQ and written questions, or import a CSV / Excel sheet.</p></div><a class="button button-outline" href="{{ url_for('teacher_dashboard') }}">← Your exams</a></section>
+<section class="content-grid question-bank-tools">
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">ADD A QUESTION</span><h2>Create a bank item</h2></div></div>
+    <form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Subject<input name="subject" maxlength="120" list="question-subjects" required><datalist id="question-subjects">{% for subject in subjects %}<option value="{{ subject }}">{% endfor %}</datalist></label>
+      <label>Question type<select name="question_type" data-question-type><option value="mcq">Multiple choice</option><option value="subjective">Written response</option></select></label>
+      <label>Question text<textarea name="question_text" rows="3" maxlength="10000" required></textarea></label>
+      <div data-mcq-fields><div class="choice-fields"><label><span>A</span><input name="options" maxlength="2000" placeholder="First choice"></label><label><span>B</span><input name="options" maxlength="2000" placeholder="Second choice"></label><label><span>C</span><input name="options" maxlength="2000" placeholder="Third choice"></label><label><span>D</span><input name="options" maxlength="2000" placeholder="Fourth choice"></label></div><label>Correct choice<select name="correct_index"><option value="">Select the correct answer</option><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label></div>
+      <label>Points<input type="number" name="marks" min="0.01" max="9999.99" step="0.01" value="1" required></label>
+      <button class="button button-primary" type="submit">Save question</button>
+    </form>
+  </article>
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">BULK IMPORT</span><h2>Upload CSV or Excel</h2></div></div><p class="muted-text">Required columns: <code>question_text</code> and <code>marks</code>. MCQs also need <code>option_a</code>–<code>option_d</code> and <code>correct_option</code> (A–D). Optional: <code>type</code>, <code>subject</code>.</p>
+    <form method="post" action="{{ url_for('import_question_bank') }}" enctype="multipart/form-data" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Default subject for imported rows<input name="subject" maxlength="120" list="import-subjects"><datalist id="import-subjects">{% for subject in subjects %}<option value="{{ subject }}">{% endfor %}</datalist></label><label>Question file<input type="file" name="question_file" accept=".csv,.xlsx" required></label><button class="button button-outline" type="submit">Import up to 100 questions</button></form>
+  </article>
+</section>
+<section class="panel dashboard-section"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">REUSABLE QUESTIONS</span><h2>Saved items <span class="count-tag">{{ items|length }}</span></h2></div></div>
+  {% if items %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Question</th><th>Subject</th><th>Type</th><th>Points</th><th>Use in exam</th><th></th></tr></thead><tbody>
+    {% for item in items %}<tr><td><strong>{{ item.question_text }}</strong>{% if item.question_type == "mcq" %}<small class="table-sub">{{ item.options|join(" · ") }}</small>{% endif %}</td><td>{{ item.subject }}</td><td>{{ "Multiple choice" if item.question_type == "mcq" else "Written" }}</td><td>{{ item.marks }}</td><td>{% if exams %}<form method="post" action="{{ url_for('add_bank_question_to_exam', item_id=item.id) }}" class="inline-select-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="exam_id" required aria-label="Select exam for {{ item.question_text[:40] }}"><option value="">Select exam</option>{% for exam in exams %}<option value="{{ exam.id }}">{{ exam.title }}</option>{% endfor %}</select><button class="table-action" type="submit">Add</button></form>{% else %}<span class="muted-text">Create an exam without attempts first</span>{% endif %}</td><td><form method="post" action="{{ url_for('delete_question_bank_item', item_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="table-action table-action-danger" type="submit" data-confirm="Remove this question from the bank?">Delete</button></form></td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty-state"><strong>Your bank is empty</strong><p>Add a question or import a spreadsheet to build a reusable question collection.</p></div>{% endif %}
+</section>
+{% endblock %}

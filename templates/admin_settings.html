@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}System settings{% endblock %}
+{% block content %}
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ADMINISTRATION / SETTINGS</span><h1>System settings</h1><p>Configure registration availability and default examination values.</p></div><a class="button button-outline" href="{{ url_for('admin_dashboard') }}">← Dashboard</a></section>
+<section class="panel form-panel"><form method="post" class="stack-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label class="checkbox-row"><input type="checkbox" name="student_registration_enabled" {{ "checked" if settings.student_registration_enabled == "true" else "" }}><span><strong>Allow student self-registration</strong><small>New student accounts can be created through the registration page.</small></span></label>
+  <label>Default exam duration <span class="label-hint">Minutes, 1–10,080</span><input type="number" name="default_exam_duration" min="1" max="10080" value="{{ settings.default_exam_duration }}" required></label>
+  <label>Default penalty per wrong answer<input type="number" name="default_negative_marks_per_wrong" min="0" max="9999.99" step="0.01" value="{{ settings.default_negative_marks_per_wrong }}" required></label>
+  <button class="button button-primary" type="submit">Save settings</button>
+</form></section>
+{% endblock %}

@@ -18,13 +18,16 @@
         <a href="{{ url_for('dashboard') }}">Dashboard</a>
         {% if current_user().role in ['teacher', 'admin'] %}
           <a href="{{ url_for('teacher_results') }}">Results</a>
+          <a href="{{ url_for('question_bank') }}">Question bank</a>
         {% elif current_user().role == 'student' %}
           <a href="{{ url_for('student_results') }}">My results</a>
         {% endif %}
         {% if current_user().role == 'admin' %}
           <a href="{{ url_for('admin_users') }}">Users</a>
+          <a href="{{ url_for('admin_catalog') }}">Catalogs</a>
         {% endif %}
-        <span class="nav-user"><span class="avatar">{{ current_user().name[:1]|upper }}</span><span>{{ current_user().name }}<small>{{ current_user().role|title }}</small></span></span>
+        <a href="{{ url_for('notifications') }}">Notifications</a>
+        <a href="{{ url_for('profile') }}" class="nav-user"><span class="avatar">{{ current_user().name[:1]|upper }}</span><span>{{ current_user().name }}<small>{{ current_user().role|title }} · Profile</small></span></a>
         <form action="{{ url_for('logout') }}" method="post" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="nav-logout" type="submit">Sign out</button>

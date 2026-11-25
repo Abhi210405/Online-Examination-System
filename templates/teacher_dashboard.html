@@ -1,11 +1,40 @@
 {% extends "base.html" %}
 {% block title %}Teaching workspace{% endblock %}
 {% block content %}
-<section class="page-heading"><div><span class="eyebrow eyebrow-dark">TEACHING WORKSPACE</span><h1>Your examinations, at a glance.</h1><p>Create a question set, set the schedule, and follow student results.</p></div><a class="button button-primary" href="{{ url_for('create_exam') }}">＋ Create examination</a></section>
+<section class="page-heading">
+  <div><span class="eyebrow eyebrow-dark">TEACHING WORKSPACE</span><h1>Your examinations, at a glance.</h1><p>Create assessments, monitor attempts, and review student performance.</p></div>
+  <a class="button button-primary" href="{{ url_for('create_exam') }}">＋ Create examination</a>
+</section>
 {% if current_user().role == "admin" %}<div class="info-banner"><span>ⓘ</span> You’re viewing the teaching workspace as an administrator. You can manage any examination.</div>{% endif %}
-<section class="stat-grid stat-grid-three"><article class="stat-card"><span class="stat-label">Examinations</span><span class="stat-icon icon-blue">▤</span><strong>{{ exams|length }}</strong><small>Created in this workspace</small></article><article class="stat-card"><span class="stat-label">Student attempts</span><span class="stat-icon icon-violet">◷</span><strong>{{ attempt_count }}</strong><small>Across your examinations</small></article><article class="stat-card stat-card-action"><span class="stat-label">Results & insights</span><span class="stat-icon icon-green">▥</span><strong>Review results</strong><small>See submitted student scores</small><a class="card-action-link" href="{{ url_for('teacher_results') }}">Open results →</a></article></section>
-<section class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">YOUR QUESTION SETS</span><h2>Examinations <span class="count-tag">{{ exams|length }}</span></h2></div></div>
-  {% if exams %}<div class="table-wrap"><table><thead><tr><th>Examination</th><th>Schedule</th><th>Questions</th><th>Duration</th><th>Status</th><th>Manage</th></tr></thead><tbody>{% for exam in exams %}<tr><td><strong>{{ exam.title }}</strong><small class="table-sub">{{ exam.department or "All departments" }} · {{ exam.stream or "All streams" }} · {{ exam.subject }}{% if current_user().role == "admin" %} · {{ exam.creator.name }}{% endif %}</small></td><td>{% if exam.start_at %}<time data-local-time="{{ exam.start_at.isoformat() }}">{{ exam.start_at.strftime('%b %d, %H:%M') }} UTC</time>{% else %}Anytime{% endif %}</td><td>{{ exam.questions|length }}</td><td>{{ exam.duration_minutes }} min</td><td><span class="pill pill-{{ exam.status }}">{{ exam.status|title }}</span></td><td><div class="table-actions"><a class="table-action" href="{{ url_for('manage_questions', exam_id=exam.id) }}">Questions</a>{% if not exam.attempts %}<a class="table-action" href="{{ url_for('edit_exam', exam_id=exam.id) }}">Edit</a>{% else %}<span class="muted-text">Locked</span>{% endif %}</div></td></tr>{% endfor %}</tbody></table></div>
-  {% else %}<div class="empty-state"><span>▤</span><strong>Your first examination starts here</strong><p>Create an exam, add four-choice questions, and publish it for students.</p><a class="button button-primary button-sm" href="{{ url_for('create_exam') }}">Create an examination</a></div>{% endif %}
+<section class="stat-grid" aria-label="Teaching summary">
+  <article class="stat-card"><span class="stat-label">Total examinations</span><strong>{{ metrics.exams }}</strong><small>Created in this workspace</small></article>
+  <article class="stat-card"><span class="stat-label">Total students</span><strong>{{ metrics.students }}</strong><small>Student accounts on this platform</small></article>
+  <article class="stat-card"><span class="stat-label">Active examinations</span><strong>{{ metrics.active_exams }}</strong><small>Published and currently open</small></article>
+  <article class="stat-card"><span class="stat-label">Pending evaluations</span><strong>{{ metrics.pending_evaluations }}</strong><small>Written responses awaiting grading</small></article>
+</section>
+<section class="quick-actions-grid dashboard-section">
+  <a class="quick-link panel" href="{{ url_for('question_bank') }}"><span class="quick-icon icon-violet">✎</span><span><strong>Question bank</strong><small>Import, reuse, and manage questions</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('teacher_results') }}"><span class="quick-icon icon-green">▥</span><span><strong>Results & evaluations</strong><small>{{ metrics.attempts }} attempts · grade written answers</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('teacher_results_csv') }}"><span class="quick-icon icon-blue">↓</span><span><strong>Download CSV report</strong><small>Export submitted examination results</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('teacher_results_pdf') }}"><span class="quick-icon icon-amber">▤</span><span><strong>Download PDF report</strong><small>Print-ready results summary</small></span><b>→</b></a>
+</section>
+<section class="panel dashboard-section">
+  <div class="panel-heading"><div><span class="eyebrow eyebrow-dark">YOUR QUESTION SETS</span><h2>Examinations <span class="count-tag">{{ exams|length }}</span></h2></div></div>
+  {% if exams %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Examination</th><th>Schedule</th><th>Questions</th><th>Duration</th><th>Status</th><th>Manage</th></tr></thead><tbody>
+    {% for exam in exams %}<tr>
+      <td><strong>{{ exam.title }}</strong><small class="table-sub">{{ exam.department or "All departments" }} · {{ exam.stream or "All streams" }} · {{ exam.subject }}{% if current_user().role == "admin" %} · {{ exam.creator.name }}{% endif %}</small></td>
+      <td>{% if exam.start_at %}<time data-local-time="{{ exam.start_at.isoformat() }}">{{ exam.start_at.strftime('%b %d, %H:%M') }} UTC</time>{% else %}Anytime{% endif %}{% if exam.end_at %}<small class="table-sub">Closes <time data-local-time="{{ exam.end_at.isoformat() }}">{{ exam.end_at.strftime('%b %d, %H:%M') }} UTC</time></small>{% endif %}</td>
+      <td>{{ exam.questions|length }} <small class="table-sub">/ {{ exam.target_question_count or exam.questions|length }}</small></td>
+      <td>{{ exam.duration_minutes }} min</td>
+      <td><span class="pill pill-{{ exam.status }}">{{ exam.status|title }}</span></td>
+      <td><div class="table-actions exam-actions">
+        <a class="table-action" href="{{ url_for('manage_questions', exam_id=exam.id) }}">Questions</a>
+        {% if not exam.attempts %}<a class="table-action" href="{{ url_for('edit_exam', exam_id=exam.id) }}">Edit</a>{% else %}<a class="table-action" href="{{ url_for('teacher_results') }}">Attempts</a>{% endif %}
+        <form action="{{ url_for('update_exam_status', exam_id=exam.id) }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="status" aria-label="Set {{ exam.title }} status"><option value="draft" {{ "selected" if exam.status == "draft" else "" }}>Draft</option><option value="published" {{ "selected" if exam.status == "published" else "" }}>Publish</option><option value="closed" {{ "selected" if exam.status == "closed" else "" }}>Close</option></select><button class="table-action" type="submit">Save status</button></form>
+        {% if not exam.attempts %}<form action="{{ url_for('delete_exam', exam_id=exam.id) }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="table-action table-action-danger" type="submit" data-confirm="Permanently delete {{ exam.title }}?">Delete</button></form>{% endif %}
+      </div></td>
+    </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-state"><span>▤</span><strong>Your first examination starts here</strong><p>Create an exam, add MCQ or written questions, and schedule it for students.</p><a class="button button-primary button-sm" href="{{ url_for('create_exam') }}">Create an examination</a></div>{% endif %}
 </section>
 {% endblock %}

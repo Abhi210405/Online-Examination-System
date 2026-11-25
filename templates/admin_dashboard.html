@@ -1,17 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Administrator dashboard{% endblock %}
 {% block content %}
-<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ADMINISTRATION</span><h1>Good to see you, {{ current_user().name.split()[0] }}.</h1><p>Here’s what’s happening across your examination portal.</p></div><a class="button button-primary" href="{{ url_for('admin_users') }}">Manage accounts <span>→</span></a></section>
-<section class="stat-grid">
-  <article class="stat-card"><span class="stat-label">Total users</span><span class="stat-icon icon-blue">♙</span><strong>{{ counts.users }}</strong><small>Active and inactive accounts</small></article>
-  <article class="stat-card"><span class="stat-label">Examinations</span><span class="stat-icon icon-violet">▤</span><strong>{{ counts.exams }}</strong><small>Across all teaching staff</small></article>
-  <article class="stat-card"><span class="stat-label">Questions</span><span class="stat-icon icon-green">✎</span><strong>{{ counts.questions }}</strong><small>In the question bank</small></article>
-  <article class="stat-card"><span class="stat-label">Exam attempts</span><span class="stat-icon icon-amber">◷</span><strong>{{ counts.attempts }}</strong><small>Started by students</small></article>
+<section class="page-heading"><div><span class="eyebrow eyebrow-dark">ADMINISTRATION</span><h1>Good to see you, {{ current_user().name.split()[0] }}.</h1><p>Live overview of accounts, examinations, attempts, and system activity.</p></div><a class="button button-primary" href="{{ url_for('admin_users') }}">Manage accounts <span>→</span></a></section>
+<section class="stat-grid" aria-label="Platform statistics">
+  <article class="stat-card"><span class="stat-label">Total students</span><strong>{{ counts.students }}</strong><small>Student accounts</small></article>
+  <article class="stat-card"><span class="stat-label">Total teachers</span><strong>{{ counts.teachers }}</strong><small>Teacher accounts</small></article>
+  <article class="stat-card"><span class="stat-label">Total examinations</span><strong>{{ counts.exams }}</strong><small>{{ counts.active_exams }} currently open</small></article>
+  <article class="stat-card"><span class="stat-label">Total questions</span><strong>{{ counts.questions }}</strong><small>Across all examinations</small></article>
+  <article class="stat-card"><span class="stat-label">Exam attempts</span><strong>{{ counts.attempts }}</strong><small>Started by students</small></article>
+  <article class="stat-card"><span class="stat-label">Active / inactive users</span><strong>{{ counts.active_users }} / {{ counts.inactive_users }}</strong><small>{{ counts.admins }} administrator accounts</small></article>
 </section>
-<section class="content-grid">
-  <article class="panel panel-main"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">RECENT ACTIVITY</span><h2>Latest examinations</h2></div><a class="text-link" href="{{ url_for('teacher_dashboard') }}">All exams →</a></div>
-    {% if recent_exams %}<div class="table-wrap"><table><thead><tr><th>Examination</th><th>Owner</th><th>Status</th><th>Duration</th></tr></thead><tbody>{% for exam in recent_exams %}<tr><td><strong>{{ exam.title }}</strong><small class="table-sub">{{ exam.subject }}</small></td><td>{{ exam.creator.name }}</td><td><span class="pill pill-{{ exam.status }}">{{ exam.status|title }}</span></td><td>{{ exam.duration_minutes }} min</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-state"><span>▤</span><strong>No examinations yet</strong><p>When a teacher creates an exam, it will appear here.</p><a class="text-link" href="{{ url_for('teacher_dashboard') }}">Open teaching workspace →</a></div>{% endif %}
-  </article>
-  <aside class="panel quick-panel"><span class="eyebrow eyebrow-dark">QUICK ACTIONS</span><h2>Keep things moving.</h2><a class="quick-link" href="{{ url_for('admin_users') }}"><span class="quick-icon icon-blue">♙</span><span><strong>Create an account</strong><small>Add a teacher or administrator</small></span><b>→</b></a><a class="quick-link" href="{{ url_for('create_exam') }}"><span class="quick-icon icon-violet">＋</span><span><strong>Create an exam</strong><small>Set up an assessment</small></span><b>→</b></a><a class="quick-link" href="{{ url_for('teacher_results') }}"><span class="quick-icon icon-green">▥</span><span><strong>Review results</strong><small>See submitted attempts</small></span><b>→</b></a></aside>
+<section class="admin-tools-grid dashboard-section">
+  <a class="quick-link panel" href="{{ url_for('admin_users') }}"><span class="quick-icon icon-blue">♙</span><span><strong>People & permissions</strong><small>Manage students, teachers, and admins</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('admin_catalog') }}"><span class="quick-icon icon-violet">▤</span><span><strong>Subjects & departments</strong><small>Manage academic catalogs</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('admin_monitoring') }}"><span class="quick-icon icon-green">◷</span><span><strong>Examination monitoring</strong><small>Review submitted and active attempts</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('admin_activity') }}"><span class="quick-icon icon-amber">≡</span><span><strong>Activity logs</strong><small>Review recent administrative actions</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('admin_settings') }}"><span class="quick-icon icon-violet">⚙</span><span><strong>System settings</strong><small>Registration and examination defaults</small></span><b>→</b></a>
+  <a class="quick-link panel" href="{{ url_for('teacher_dashboard') }}"><span class="quick-icon icon-blue">▥</span><span><strong>Examination management</strong><small>Manage exams and review results</small></span><b>→</b></a>
+</section>
+<section class="dashboard-grid dashboard-section">
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">SYSTEM ANALYTICS</span><h2>Accounts by role</h2></div></div><div class="chart-frame"><canvas data-chart="bar" data-chart-data='{{ chart_data.users|tojson }}' aria-label="User accounts by role" role="img"></canvas><div class="chart-tooltip" data-chart-tooltip aria-live="polite"></div></div></article>
+  <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">EXAMINATIONS</span><h2>Status distribution</h2></div></div><div class="chart-frame"><canvas data-chart="bar" data-chart-data='{{ chart_data.exams|tojson }}' aria-label="Examinations by status" role="img"></canvas><div class="chart-tooltip" data-chart-tooltip aria-live="polite"></div></div></article>
+</section>
+<section class="panel dashboard-section"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">RECENT ACTIVITY</span><h2>Latest examinations</h2></div><a class="text-link" href="{{ url_for('teacher_dashboard') }}">All exams →</a></div>
+  {% if recent_exams %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Examination</th><th>Owner</th><th>Status</th><th>Questions</th><th>Duration</th></tr></thead><tbody>{% for exam in recent_exams %}<tr><td><strong>{{ exam.title }}</strong><small class="table-sub">{{ exam.subject }}</small></td><td>{{ exam.creator.name }}</td><td><span class="pill pill-{{ exam.status }}">{{ exam.status|title }}</span></td><td>{{ exam.questions|length }}</td><td>{{ exam.duration_minutes }} min</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-state"><span>▤</span><strong>No examinations yet</strong><p>When a teacher creates an exam, it will appear here.</p><a class="text-link" href="{{ url_for('teacher_dashboard') }}">Open teaching workspace →</a></div>{% endif %}
 </section>
 {% endblock %}
