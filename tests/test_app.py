@@ -371,6 +371,54 @@ def test_student_registration_and_role_dashboards(client):
     assert client.get("/teacher").status_code == 403
 
 
+def test_role_dashboards_share_the_premium_shell_and_keep_role_navigation():
+    student_client = app.test_client()
+    teacher_client = app.test_client()
+    admin_client = app.test_client()
+    create_user("Dashboard Student", "dashboard-student@example.test", "student")
+    create_user("Dashboard Teacher", "dashboard-teacher@example.test", "teacher")
+    create_user("Dashboard Admin", "dashboard-admin@example.test", "admin")
+
+    role_pages = [
+        (
+            student_client,
+            "dashboard-student@example.test",
+            "/student",
+            b"Quizzes & exams",
+            ["/student/results", "/notifications", "/profile"],
+        ),
+        (
+            teacher_client,
+            "dashboard-teacher@example.test",
+            "/teacher",
+            b"Question bank",
+            ["/teacher/exams/new", "/teacher/question-bank", "/teacher/results"],
+        ),
+        (
+            admin_client,
+            "dashboard-admin@example.test",
+            "/admin",
+            b"Security monitoring",
+            [
+                "/admin/users",
+                "/teacher",
+                "/admin/monitoring",
+                "/admin/settings",
+                "/admin/catalog",
+                "/admin/activity",
+            ],
+        ),
+    ]
+    for role_client, email, path, expected_navigation, navigation_paths in role_pages:
+        login(role_client, email)
+        response = role_client.get(path)
+        assert response.status_code == 200
+        assert b'class="dashboard-app"' in response.data
+        assert b'class="dashboard-sidebar"' in response.data
+        assert expected_navigation in response.data
+        assert all(role_client.get(nav_path).status_code == 200 for nav_path in navigation_paths)
+
+
 def test_teacher_can_create_scheduled_exam_and_question_set(client):
     teacher_id = create_user("Teacher", "teacher@example.test", "teacher")
     login(client, "teacher@example.test")

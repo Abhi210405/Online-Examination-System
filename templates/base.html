@@ -4,12 +4,64 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token() }}">
-  <meta name="theme-color" content="#111a32">
+  <meta name="theme-color" content="#171638">
   <title>{% block title %}CampusExam{% endblock %} · CampusExam</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   {% block head %}{% endblock %}
 </head>
 <body>
+  {% set dashboard_view = current_user() and request.endpoint in ['student_dashboard', 'teacher_dashboard', 'admin_dashboard'] %}
+  {% if dashboard_view %}
+    {% set role_dashboard = 'student_dashboard' if current_user().role == 'student' else ('admin_dashboard' if current_user().role == 'admin' else 'teacher_dashboard') %}
+    {% set dashboard_title = 'Student dashboard' if current_user().role == 'student' else ('Admin dashboard' if current_user().role == 'admin' else 'Teacher dashboard') %}
+    <div class="dashboard-app">
+      <aside class="dashboard-sidebar" data-dashboard-sidebar>
+        <a class="brand dashboard-brand" href="{{ url_for('home') }}"><span class="brand-mark">C</span><span>campus<span class="brand-accent">exam</span></span></a>
+        <span class="sidebar-caption">YOUR WORKSPACE</span>
+        <nav class="dashboard-nav" aria-label="Dashboard navigation">
+          <a class="{{ 'is-active' if request.endpoint in ['student_dashboard', 'teacher_dashboard', 'admin_dashboard'] else '' }}" href="{{ url_for(role_dashboard) }}"><span class="sidebar-icon" aria-hidden="true">⌂</span><span>Overview</span></a>
+          {% if current_user().role == 'student' %}
+            <a href="{{ url_for('student_dashboard') }}#available-exams"><span class="sidebar-icon" aria-hidden="true">▣</span><span>Quizzes & exams</span></a>
+            <a href="{{ url_for('student_results') }}"><span class="sidebar-icon" aria-hidden="true">▤</span><span>Results</span></a>
+            <a href="{{ url_for('student_dashboard') }}#performance"><span class="sidebar-icon" aria-hidden="true">⌁</span><span>Performance</span></a>
+            <a href="{{ url_for('notifications') }}"><span class="sidebar-icon" aria-hidden="true">◉</span><span>Notifications</span></a>
+          {% elif current_user().role == 'teacher' %}
+            <a href="{{ url_for('teacher_dashboard') }}#exams"><span class="sidebar-icon" aria-hidden="true">▣</span><span>Examinations</span></a>
+            <a href="{{ url_for('create_exam') }}"><span class="sidebar-icon" aria-hidden="true">＋</span><span>Create examination</span></a>
+            <a href="{{ url_for('question_bank') }}"><span class="sidebar-icon" aria-hidden="true">▤</span><span>Question bank</span></a>
+            <a href="{{ url_for('teacher_results') }}"><span class="sidebar-icon" aria-hidden="true">⌁</span><span>Student results</span></a>
+          {% else %}
+            <a href="{{ url_for('admin_users') }}"><span class="sidebar-icon" aria-hidden="true">♙</span><span>User management</span></a>
+            <a href="{{ url_for('teacher_dashboard') }}"><span class="sidebar-icon" aria-hidden="true">▣</span><span>Exam management</span></a>
+            <a href="{{ url_for('admin_monitoring') }}"><span class="sidebar-icon" aria-hidden="true">◷</span><span>Security monitoring</span></a>
+            <a href="{{ url_for('admin_settings') }}"><span class="sidebar-icon" aria-hidden="true">⚙</span><span>System settings</span></a>
+            <a href="{{ url_for('admin_catalog') }}"><span class="sidebar-icon" aria-hidden="true">▤</span><span>Academic catalog</span></a>
+            <a href="{{ url_for('admin_activity') }}"><span class="sidebar-icon" aria-hidden="true">≡</span><span>Activity logs</span></a>
+          {% endif %}
+        </nav>
+        <div class="sidebar-account">
+          <a class="sidebar-profile" href="{{ url_for('profile') }}">
+            <span class="avatar">{{ current_user().name[:1]|upper }}</span>
+            <span class="sidebar-profile-copy"><strong>{{ current_user().name }}</strong><small>{{ current_user().role|title }} account</small></span>
+            <span class="profile-chevron" aria-hidden="true">↗</span>
+          </a>
+          <form action="{{ url_for('logout') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="sidebar-signout" type="submit"><span aria-hidden="true">↪</span> Sign out</button>
+          </form>
+        </div>
+      </aside>
+      <button class="dashboard-scrim" type="button" aria-label="Close dashboard navigation" data-dashboard-scrim></button>
+      <div class="dashboard-main">
+        <header class="dashboard-topbar">
+          <button class="dashboard-menu-toggle" type="button" aria-label="Open dashboard navigation" aria-expanded="false" data-dashboard-toggle><span aria-hidden="true">☰</span></button>
+          <div class="dashboard-breadcrumb"><span>CampusExam</span><span aria-hidden="true">/</span><strong>{{ dashboard_title }}</strong></div>
+          <div class="dashboard-header-actions">
+            <a class="header-icon-link" href="{{ url_for('notifications') }}" aria-label="Notifications" title="Notifications"><span aria-hidden="true">◉</span></a>
+            <a class="header-profile" href="{{ url_for('profile') }}"><span class="avatar">{{ current_user().name[:1]|upper }}</span><span><strong>{{ current_user().name }}</strong><small>{{ current_user().role|title }}</small></span></a>
+          </div>
+        </header>
+  {% else %}
   <header class="topbar">
     <a class="brand" href="{{ url_for('home') }}"><span class="brand-mark">C</span><span>campus<span class="brand-accent">exam</span></span></a>
     <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" data-nav-toggle>☰</button>
@@ -40,7 +92,8 @@
       {% endif %}
     </nav>
   </header>
-  <main class="page-shell">
+  {% endif %}
+  <main class="page-shell{{ ' dashboard-page-shell' if dashboard_view else '' }}">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="flash-stack" aria-live="polite">
@@ -52,7 +105,11 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="footer"><span>© {{ utcnow().year }} CampusExam</span><span>College examination management</span><span class="footer-watermark">Abhinandan Pandey</span></footer>
+  <footer class="footer{{ ' dashboard-footer' if dashboard_view else '' }}"><span>© {{ utcnow().year }} CampusExam</span><span>College examination management</span><span class="footer-watermark">Abhinandan Pandey</span></footer>
+  {% if dashboard_view %}
+      </div>
+    </div>
+  {% endif %}
   <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>

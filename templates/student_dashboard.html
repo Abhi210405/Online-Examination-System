@@ -17,7 +17,7 @@
   <article class="stat-card"><span class="stat-label">Average score</span><strong>{{ (stats.average_score|string) + "%" if stats.average_score is not none else "—" }}</strong><small>Across graded results</small></article>
 </section>
 
-<section class="dashboard-grid">
+<section class="dashboard-grid" id="performance">
   <article class="panel">
     <div class="panel-heading">
       <div><span class="eyebrow eyebrow-dark">PERFORMANCE</span><h2>Subject-wise results</h2></div>
@@ -38,7 +38,7 @@
   </article>
 </section>
 
-<section class="panel dashboard-section">
+<section class="panel dashboard-section" id="available-exams">
   <div class="panel-heading">
     <div><span class="eyebrow eyebrow-dark">EXAMINATIONS</span><h2>Available examinations <span class="count-tag">{{ available_exams|length }}</span></h2></div>
     <a class="text-link" href="{{ url_for('student_results') }}">Examination history →</a>
@@ -74,7 +74,7 @@
   </article>
 </section>
 
-<section class="panel dashboard-section">
+<section class="panel dashboard-section" id="results">
   <div class="panel-heading"><div><span class="eyebrow eyebrow-dark">EXAMINATION HISTORY</span><h2>Recent results</h2></div><a class="text-link" href="{{ url_for('student_results') }}">All results →</a></div>
   {% if completed_attempts %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Examination</th><th>Score</th><th>Submitted</th><th></th></tr></thead><tbody>
     {% for attempt in completed_attempts %}<tr><td><strong>{{ attempt.exam.title }}</strong><small class="table-sub">{{ attempt.exam.subject }}</small></td><td>{% if pending_evaluations.get(attempt.id, 0) %}Pending{% else %}{{ attempt.score }} / {{ attempt.exam.total_marks }}{% endif %}</td><td><time data-local-time="{{ attempt.submitted_at.isoformat() }}">{{ attempt.submitted_at.strftime('%b %d, %Y') }} UTC</time></td><td><a class="table-action" href="{{ url_for('student_result', attempt_id=attempt.id) }}">View →</a></td></tr>{% endfor %}

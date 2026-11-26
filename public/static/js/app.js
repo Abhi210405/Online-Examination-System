@@ -32,6 +32,27 @@ document.addEventListener("DOMContentLoaded", () => {
     topnav?.classList.toggle("is-open", !expanded);
   });
 
+  const dashboardToggle = document.querySelector("[data-dashboard-toggle]");
+  const dashboardSidebar = document.querySelector("[data-dashboard-sidebar]");
+  const dashboardScrim = document.querySelector("[data-dashboard-scrim]");
+  const dashboardApp = document.querySelector(".dashboard-app");
+  const setDashboardMenuOpen = (open) => {
+    dashboardSidebar?.classList.toggle("is-open", open);
+    dashboardApp?.classList.toggle("is-menu-open", open);
+    dashboardToggle?.setAttribute("aria-expanded", String(open));
+  };
+  dashboardToggle?.addEventListener("click", () => {
+    const expanded = dashboardToggle.getAttribute("aria-expanded") === "true";
+    setDashboardMenuOpen(!expanded);
+  });
+  dashboardScrim?.addEventListener("click", () => setDashboardMenuOpen(false));
+  dashboardSidebar?.querySelectorAll("a").forEach((link) => {
+    link.addEventListener("click", () => setDashboardMenuOpen(false));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setDashboardMenuOpen(false);
+  });
+
   document.querySelectorAll("[data-confirm]").forEach((element) => {
     element.addEventListener("click", (event) => {
       if (!window.confirm(element.dataset.confirm)) event.preventDefault();
@@ -142,6 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const context = canvas.getContext("2d");
     if (!context) return;
     const tooltip = canvas.parentElement.querySelector("[data-chart-tooltip]");
+    const chartColors = ["#4263EB", "#6957E8", "#20C9C3", "#FF7777", "#FFD166"];
     const render = () => {
       const ratio = window.devicePixelRatio || 1;
       const width = Math.max(280, canvas.clientWidth);
@@ -156,12 +178,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const maximum = Math.max(1, ...points.map((point) => Number(point.value) || 0));
       const ceiling = Math.ceil(maximum / 10) * 10 || 10;
       const chartHits = [];
-      context.font = "10px DM Sans, Arial";
+      context.font = "10px Inter, Arial";
       context.textAlign = "right";
       context.fillStyle = "#929bad";
       for (let tick = 0; tick <= 4; tick += 1) {
         const y = margin.top + chartHeight - (chartHeight * tick) / 4;
-        context.strokeStyle = "#edf0f5";
+        context.strokeStyle = "#eeeef5";
         context.beginPath();
         context.moveTo(margin.left, y);
         context.lineTo(width - margin.right, y);
@@ -170,7 +192,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const slotWidth = chartWidth / points.length;
       if (canvas.dataset.chart === "line") {
-        context.strokeStyle = "#596ee5";
+        context.strokeStyle = "#4263EB";
         context.lineWidth = 2;
         context.beginPath();
       }
@@ -182,12 +204,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (canvas.dataset.chart === "line") {
           if (index === 0) context.moveTo(centerX, y);
           else context.lineTo(centerX, y);
-          context.fillStyle = "#596ee5";
+          context.fillStyle = "#6957E8";
           context.beginPath();
           context.arc(centerX, y, 3.5, 0, Math.PI * 2);
           context.fill();
           chartHits.push({ x: centerX, y, width: slotWidth, label: point.label, value: point.value });
-          context.strokeStyle = "#596ee5";
+          context.strokeStyle = "#4263EB";
           context.beginPath();
           if (index > 0) {
             const prior = points[index - 1];
@@ -200,7 +222,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         } else {
           const barWidth = Math.min(42, slotWidth * 0.58);
-          context.fillStyle = index % 2 ? "#7659e9" : "#596ee5";
+          context.fillStyle = chartColors[index % chartColors.length];
           context.beginPath();
           context.fillRect(centerX - barWidth / 2, y, barWidth, barHeight);
           context.fill();

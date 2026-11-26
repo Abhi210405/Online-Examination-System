@@ -18,7 +18,7 @@
   <a class="quick-link panel" href="{{ url_for('admin_settings') }}"><span class="quick-icon icon-violet">⚙</span><span><strong>System settings</strong><small>Registration and examination defaults</small></span><b>→</b></a>
   <a class="quick-link panel" href="{{ url_for('teacher_dashboard') }}"><span class="quick-icon icon-blue">▥</span><span><strong>Examination management</strong><small>Manage exams and review results</small></span><b>→</b></a>
 </section>
-<section class="dashboard-grid dashboard-section">
+<section class="dashboard-grid dashboard-section" id="analytics">
   <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">SYSTEM ANALYTICS</span><h2>Accounts by role</h2></div></div><div class="chart-frame"><canvas data-chart="bar" data-chart-data='{{ chart_data.users|tojson }}' aria-label="User accounts by role" role="img"></canvas><div class="chart-tooltip" data-chart-tooltip aria-live="polite"></div></div></article>
   <article class="panel"><div class="panel-heading"><div><span class="eyebrow eyebrow-dark">EXAMINATIONS</span><h2>Status distribution</h2></div></div><div class="chart-frame"><canvas data-chart="bar" data-chart-data='{{ chart_data.exams|tojson }}' aria-label="Examinations by status" role="img"></canvas><div class="chart-tooltip" data-chart-tooltip aria-live="polite"></div></div></article>
 </section>

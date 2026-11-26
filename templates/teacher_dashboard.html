@@ -18,7 +18,7 @@
   <a class="quick-link panel" href="{{ url_for('teacher_results_csv') }}"><span class="quick-icon icon-blue">↓</span><span><strong>Download CSV report</strong><small>Export submitted examination results</small></span><b>→</b></a>
   <a class="quick-link panel" href="{{ url_for('teacher_results_pdf') }}"><span class="quick-icon icon-amber">▤</span><span><strong>Download PDF report</strong><small>Print-ready results summary</small></span><b>→</b></a>
 </section>
-<section class="panel dashboard-section">
+<section class="panel dashboard-section" id="exams">
   <div class="panel-heading"><div><span class="eyebrow eyebrow-dark">YOUR QUESTION SETS</span><h2>Examinations <span class="count-tag">{{ exams|length }}</span></h2></div></div>
   {% if exams %}<div class="table-wrap"><table data-enhanced-table><thead><tr><th>Examination</th><th>Schedule</th><th>Questions</th><th>Duration</th><th>Status</th><th>Manage</th></tr></thead><tbody>
     {% for exam in exams %}<tr>
